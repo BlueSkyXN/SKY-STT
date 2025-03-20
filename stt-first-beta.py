@@ -1589,7 +1589,7 @@ def parse_arguments():
     parser.add_argument("--min-speakers", type=int, default=1, help="最小说话人数量")
     parser.add_argument("--max-speakers", type=int, default=5, help="最大说话人数量")
     
-    # 音频格式参数（新增）
+    # 音频格式参数
     parser.add_argument("--audio-format", choices=["auto", "wav", "flac", "none"], default="auto",
                       help="音频格式处理方式: auto(自动检测并转换不兼容格式), wav(强制转换为WAV), "
                            "flac(强制转换为FLAC), none(不进行转换)")
@@ -1599,9 +1599,6 @@ def parse_arguments():
     env_group.add_argument("--cuda-path", help="自定义CUDA安装路径")
     env_group.add_argument("--cudnn-path", help="自定义cuDNN库路径")
     env_group.add_argument("--ffmpeg-path", help="自定义FFmpeg可执行文件目录")
-    
-    # 保留旧参数 --cudnn 以保持向后兼容
-    env_group.add_argument("--cudnn", help="覆盖cuDNN库路径 (已弃用，请使用--cudnn-path)")
     
     # 高级参数
     parser.add_argument("--verbose", "-v", action="store_true", help="启用详细日志")
@@ -1624,14 +1621,10 @@ def parse_arguments():
         os.environ["CUDA_HOME"] = CUDA_PATH
         os.environ["CUDA_PATH"] = CUDA_PATH
     
-    # 处理cuDNN路径 (优先使用新参数)
+    # 处理cuDNN路径
     if args.cudnn_path:
         CUDNN_PATH = args.cudnn_path
         add_path_to_env(CUDNN_PATH, "cuDNN")
-    elif args.cudnn:  # 向后兼容旧参数
-        CUDNN_PATH = args.cudnn
-        add_path_to_env(CUDNN_PATH, "cuDNN")
-        logger.warning("--cudnn参数已弃用，请使用--cudnn-path")
     
     # 处理FFmpeg路径
     if args.ffmpeg_path:
@@ -1643,7 +1636,6 @@ def parse_arguments():
         parser.error("启用说话人分割时(--speakers)必须通过--speaker-model提供模型路径或ID")
     
     return args
-
 
 def process_single_file(args):
     """处理单个音频文件"""
