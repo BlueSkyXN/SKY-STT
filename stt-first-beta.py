@@ -6,6 +6,7 @@ FasterWhisper与Pyannote集成的语音转文字工具
 
 一个高效、稳定的语音转文字命令行工具，基于Faster Whisper和Pyannote模型。
 支持多种输出格式、批处理、说话人分割和精确的进度报告。
+增强版：支持m4a格式自动转换为wav以适配说话人分割
 """
 
 import os
@@ -34,24 +35,30 @@ logging.basicConfig(
 logger = logging.getLogger("whisper_transcriber")
 
 # =========================== 环境配置 ===========================
-# CUDA环境设置 (可选，仅在需要覆盖系统环境时设置)
-CUDNN_PATH = r"C:\NVIDIA\cudnn-windows-x86_64-9.8.0.87_cuda12\bin"  # 设为None可使用系统环境
+# 默认使用系统环境变量
+CUDA_PATH = None     # CUDA安装路径
+CUDNN_PATH = None    # cuDNN库路径
+FFMPEG_PATH = None   # FFmpeg可执行文件路径
 
-# 仅当明确指定cuDNN路径时才覆盖环境变量
-if CUDNN_PATH:
-    if Path(CUDNN_PATH).exists():
-        # 使用适合当前操作系统的路径分隔符
+# 辅助函数：安全添加路径到环境变量
+def add_path_to_env(path, name):
+    if path and Path(path).exists():
         path_sep = ";" if os.name == "nt" else ":"
-        os.environ["PATH"] = CUDNN_PATH + path_sep + os.environ.get("PATH", "")
-        logger.info(f"使用自定义cuDNN路径: {CUDNN_PATH}")
-    else:
-        logger.warning(f"指定的cuDNN路径不存在: {CUDNN_PATH}")
+        os.environ["PATH"] = path + path_sep + os.environ.get("PATH", "")
+        logger.info(f"使用自定义{name}路径: {path}")
+        return True
+    elif path:
+        logger.warning(f"指定的{name}路径不存在: {path}")
+    return False
 
 # 防止OpenMP多次加载问题
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # 限制OpenMP线程数，避免过度使用CPU
 os.environ["OMP_NUM_THREADS"] = "4"
 # =================================================================
+
+# 临时文件列表，用于跟踪需要清理的文件
+TEMP_FILES = []
 
 # 计时装饰器
 def timer(func):
@@ -856,6 +863,263 @@ class TranscriptionFormatter:
         return output_buffer.getvalue()
 
 
+class AudioProcessor:
+    """音频处理工具类"""
+    
+    # 定义支持的格式列表
+    COMPATIBLE_FORMATS = [".wav"]  # 默认兼容的格式
+    SUPPORTED_FORMATS = [".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus"]  # 支持转换的格式
+    
+    @staticmethod
+    def check_ffmpeg_available() -> bool:
+        """
+        检查ffmpeg是否可用
+        
+        Returns:
+            是否可用
+        """
+        try:
+            import subprocess
+            # 尝试运行ffmpeg命令 - 使用二进制模式避免编码问题
+            result = subprocess.run(
+                ["ffmpeg", "-version"], 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                text=False,  # 使用二进制模式
+                check=False
+            )
+            if result.returncode == 0:
+                # 安全解码stdout
+                stdout_text = result.stdout.decode('utf-8', errors='replace') if result.stdout else ""
+                ffmpeg_version = stdout_text.split('\n')[0] if stdout_text else "未知版本"
+                logger.debug(f"检测到FFmpeg: {ffmpeg_version}")
+                return True
+            else:
+                logger.debug("FFmpeg命令执行失败")
+                return False
+        except Exception as e:
+            logger.debug(f"FFmpeg检测失败: {e}")
+            return False
+    
+    @staticmethod
+    def convert_audio_with_ffmpeg(audio_file: str, output_path: str, output_format: str = "wav") -> bool:
+        """
+        使用FFmpeg将音频文件转换为指定格式，保留原始音频质量特性
+        
+        Args:
+            audio_file: 原始音频文件路径
+            output_path: 输出文件路径
+            output_format: 输出格式(wav, flac等)
+            
+        Returns:
+            是否成功
+        """
+        try:
+            import subprocess
+            
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # 根据输出格式设置编码参数，保留输入音频特性
+            codec_params = []
+            if output_format.lower() == "wav":
+                # PCM格式，不做特殊指定让FFmpeg自动匹配原始采样率和通道数
+                codec_params = ["-acodec", "pcm_s24le"]  # 仅指定位深度为24位
+            elif output_format.lower() == "flac":
+                # FLAC无损压缩，保留原始音频特性
+                codec_params = [
+                    "-acodec", "flac",
+                    "-compression_level", "12"  # 最高压缩级别，不影响质量
+                ]
+            else:
+                # 其他格式尽量使用复制模式
+                codec_params = ["-acodec", "copy"]
+                logger.info(f"使用复制模式转换为{output_format}，保持原始音频流")
+            
+            # 构建ffmpeg命令
+            cmd = ["ffmpeg", "-i", audio_file, "-y"] + codec_params + [output_path]
+            
+            logger.debug(f"运行FFmpeg命令: {' '.join(cmd)}")
+            
+            # 执行命令 - 使用二进制模式避免编码问题
+            process = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,  # 使用二进制模式
+                check=False
+            )
+            
+            if process.returncode == 0:
+                logger.info(f"FFmpeg转换成功: {output_path}")
+                return True
+            else:
+                # 安全解码stderr，使用replace策略处理无法解码的字符
+                stderr_text = process.stderr.decode('utf-8', errors='replace') if process.stderr else ""
+                logger.warning(f"FFmpeg转换失败: {stderr_text}")
+                
+                # 尝试使用最简单的转换参数
+                logger.info("尝试使用基本设置进行转换...")
+                basic_cmd = ["ffmpeg", "-i", audio_file, "-y", output_path]
+                
+                basic_process = subprocess.run(
+                    basic_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=False,
+                    check=False
+                )
+                
+                if basic_process.returncode == 0:
+                    logger.info(f"使用基本设置转换成功: {output_path}")
+                    return True
+                else:
+                    basic_stderr_text = basic_process.stderr.decode('utf-8', errors='replace') if basic_process.stderr else ""
+                    logger.error(f"基本设置转换也失败: {basic_stderr_text}")
+                    return False
+                
+        except Exception as e:
+            logger.error(f"FFmpeg转换错误: {e}")
+            return False
+    
+    @staticmethod
+    def convert_to_format(
+        audio_file: str, 
+        target_format: str = "wav", 
+        output_dir: Optional[str] = None, 
+        auto_cleanup: bool = True
+    ) -> str:
+        """
+        将音频文件转换为指定格式，使用FFmpeg进行无损转换
+        
+        Args:
+            audio_file: 原始音频文件路径
+            target_format: 目标格式('wav', 'flac'等)，不包含点
+            output_dir: 输出目录（如果为None则使用原文件目录）
+            auto_cleanup: 是否自动将转换后的文件添加到清理列表
+            
+        Returns:
+            转换后的音频文件路径
+        """
+        audio_path = Path(audio_file)
+        current_format = audio_path.suffix.lower()
+        target_format = target_format.lower()
+        target_ext = f".{target_format}" if not target_format.startswith(".") else target_format
+        
+        # 如果已经是目标格式，则直接返回
+        if current_format == target_ext:
+            return str(audio_path)
+        
+        logger.info(f"转换音频格式: {audio_file} -> {target_format.upper()}")
+        
+        # 确定输出路径
+        if output_dir:
+            output_path = Path(output_dir) / f"{audio_path.stem}{target_ext}"
+            os.makedirs(output_dir, exist_ok=True)
+        else:
+            # 如果未指定输出目录，使用与原始文件相同的目录
+            output_path = audio_path.parent / f"{audio_path.stem}{target_ext}"
+        
+        # 检查FFmpeg是否可用
+        ffmpeg_available = AudioProcessor.check_ffmpeg_available()
+        
+        if not ffmpeg_available:
+            logger.error("FFmpeg不可用，无法转换音频格式")
+            logger.error("请安装FFmpeg并确保其在系统PATH中，或使用--ffmpeg-path参数指定其路径")
+            return audio_file
+        
+        # 使用FFmpeg进行转换
+        logger.info(f"使用FFmpeg进行无损音频格式转换为{target_format}")
+        conversion_success = AudioProcessor.convert_audio_with_ffmpeg(
+            audio_file, 
+            str(output_path),
+            target_format
+        )
+        
+        if conversion_success:
+            logger.info(f"音频格式转换完成: {output_path}")
+            
+            # 将生成的文件添加到清理列表
+            if auto_cleanup:
+                global TEMP_FILES
+                TEMP_FILES.append(str(output_path))
+                logger.debug(f"添加临时{target_format}文件到清理列表: {output_path}")
+            
+            return str(output_path)
+        else:
+            logger.error(f"无法转换到{target_format}格式，返回原始文件")
+            return audio_file
+    
+    @staticmethod
+    def is_format_compatible(audio_file: str, for_diarization: bool = False) -> bool:
+        """
+        检查音频格式是否与处理兼容
+        
+        Args:
+            audio_file: 音频文件路径
+            for_diarization: 是否用于说话人分割（更严格的兼容性要求）
+            
+        Returns:
+            是否兼容
+        """
+        audio_path = Path(audio_file)
+        audio_ext = audio_path.suffix.lower()
+        
+        # 说话人分割对格式要求更严格
+        if for_diarization:
+            return audio_ext in AudioProcessor.COMPATIBLE_FORMATS
+        
+        # 一般转录支持更多格式
+        return audio_ext in AudioProcessor.SUPPORTED_FORMATS
+    
+    @staticmethod
+    def convert_to_wav(audio_file: str, output_dir: Optional[str] = None, auto_cleanup: bool = True) -> str:
+        """
+        将音频文件转换为WAV格式（为了向后兼容）
+        
+        Args:
+            audio_file: 原始音频文件路径
+            output_dir: 输出目录
+            auto_cleanup: 是否自动将转换后的文件添加到清理列表
+            
+        Returns:
+            转换后的WAV文件路径
+        """
+        return AudioProcessor.convert_to_format(audio_file, "wav", output_dir, auto_cleanup)
+    
+    @staticmethod
+    def convert_to_wav_with_ffmpeg(audio_file: str, output_path: str) -> bool:
+        """
+        使用FFmpeg将音频文件转换为WAV格式（为了向后兼容）
+        
+        Args:
+            audio_file: 原始音频文件路径
+            output_path: 输出文件路径
+            
+        Returns:
+            是否成功
+        """
+        return AudioProcessor.convert_audio_with_ffmpeg(audio_file, output_path, "wav")
+    
+    @staticmethod
+    def cleanup_temp_files():
+        """清理所有临时生成的文件"""
+        global TEMP_FILES
+        success_count = 0
+        
+        for temp_file in TEMP_FILES:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.debug(f"已删除临时文件: {temp_file}")
+                    success_count += 1
+            except Exception as e:
+                logger.warning(f"删除临时文件失败: {temp_file}, 错误: {e}")
+        
+        logger.info(f"临时文件清理完成: 成功删除 {success_count}/{len(TEMP_FILES)} 个文件")
+        TEMP_FILES.clear()
+
+
 class WhisperTranscriber:
     """语音转录器核心类"""
     
@@ -1140,6 +1404,7 @@ class WhisperTranscriber:
         num_speakers: Optional[int] = None,
         min_speakers: Optional[int] = None,
         max_speakers: Optional[int] = None,
+        audio_format: str = "auto",
         **kwargs
     ) -> Tuple[List[Any], Any, Dict[str, Any]]:
         """
@@ -1151,17 +1416,41 @@ class WhisperTranscriber:
             num_speakers: 指定说话人数量（如果已知）
             min_speakers: 最小说话人数量
             max_speakers: 最大说话人数量
+            audio_format: 音频格式处理方式 ("auto", "wav", "flac"等)
             **kwargs: 其他转录参数
             
         Returns:
             (segments列表, 转录信息, 说话人分割结果)
         """
+        # 检查音频文件格式
+        audio_path = Path(audio_file)
+        
+        # 处理音频格式
+        processed_audio = audio_file
+        if audio_format == "auto":
+            # 自动模式：如果格式不兼容说话人分割，转换为wav
+            if not AudioProcessor.is_format_compatible(audio_file, for_diarization=True):
+                logger.info(f"检测到{audio_path.suffix}格式音频文件，Pyannote可能无法直接处理")
+                # 使用与输出文件相同的目录保存转换后的wav文件
+                output_dir = audio_path.parent
+                processed_audio = AudioProcessor.convert_to_wav(audio_file, output_dir=output_dir)
+                logger.info(f"已将{audio_path.suffix}格式转换为wav: {processed_audio}")
+        elif audio_format.lower() != "none":
+            # 指定格式模式：强制转换为指定格式
+            logger.info(f"根据用户设置，将音频转换为{audio_format}格式")
+            output_dir = audio_path.parent
+            processed_audio = AudioProcessor.convert_to_format(audio_file, audio_format, output_dir=output_dir)
+            logger.info(f"音频转换完成: {processed_audio}")
+        else:
+            # none模式：不进行任何转换
+            logger.info("用户选择不进行音频格式转换，保持原格式")
+        
         # 首先进行语音转录
         segments, info = self.transcribe(audio_file, **kwargs)
         
         # 然后执行说话人分割
         diarization_result = diarization.process(
-            audio_file,
+            processed_audio,  # 使用处理后的音频文件
             num_speakers=num_speakers,
             min_speakers=min_speakers,
             max_speakers=max_speakers
@@ -1180,6 +1469,7 @@ class WhisperTranscriber:
         num_speakers: Optional[int] = None,
         min_speakers: Optional[int] = None,
         max_speakers: Optional[int] = None,
+        audio_format: str = "auto",
         **kwargs
     ) -> str:
         """
@@ -1194,6 +1484,7 @@ class WhisperTranscriber:
             num_speakers: 指定说话人数量（如果已知）
             min_speakers: 最小说话人数量
             max_speakers: 最大说话人数量
+            audio_format: 音频格式处理方式 ("auto", "wav", "flac"等)
             **kwargs: 其他转录参数
             
         Returns:
@@ -1211,6 +1502,7 @@ class WhisperTranscriber:
                 num_speakers=num_speakers,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
+                audio_format=audio_format,
                 **kwargs
             )
             
@@ -1248,57 +1540,6 @@ class WhisperTranscriber:
             del self._model
             self._model = None
         self._clear_cache()
-
-
-class AudioProcessor:
-    """音频处理工具类"""
-    
-    @staticmethod
-    def convert_to_wav(audio_file: str, output_dir: Optional[str] = None) -> str:
-        """
-        将音频文件转换为WAV格式（如果不是WAV）
-        
-        Args:
-            audio_file: 原始音频文件路径
-            output_dir: 输出目录（如果为None则使用临时目录）
-            
-        Returns:
-            转换后的WAV文件路径
-        """
-        audio_path = Path(audio_file)
-        
-        # 如果已经是WAV格式，则直接返回
-        if audio_path.suffix.lower() == ".wav":
-            return str(audio_path)
-        
-        try:
-            import soundfile as sf
-            
-            logger.info(f"转换音频格式: {audio_file} -> WAV")
-            
-            # 确定输出路径
-            if output_dir:
-                output_path = Path(output_dir) / f"{audio_path.stem}.wav"
-                os.makedirs(output_dir, exist_ok=True)
-            else:
-                temp_dir = tempfile.mkdtemp()
-                output_path = Path(temp_dir) / f"{audio_path.stem}.wav"
-            
-            # 读取音频数据
-            data, samplerate = sf.read(audio_file)
-            
-            # 保存为WAV格式
-            sf.write(str(output_path), data, samplerate)
-            
-            logger.info(f"音频格式转换完成: {output_path}")
-            return str(output_path)
-            
-        except ImportError:
-            logger.warning("未安装soundfile库，无法转换音频格式")
-            return audio_file
-        except Exception as e:
-            logger.error(f"音频格式转换失败: {e}")
-            return audio_file
 
 
 def parse_arguments():
@@ -1341,16 +1582,30 @@ def parse_arguments():
     parser.add_argument("--in-memory", action="store_true", 
                       help="在内存中处理而不是写入临时文件")
     
-    # 说话人分割参数（新增）
+    # 说话人分割参数
     parser.add_argument("--speakers", action="store_true", help="启用说话人分割")
     parser.add_argument("--speaker-model", required=False, help="说话人分割本地模型路径或Hugging Face模型ID")
     parser.add_argument("--num-speakers", type=int, help="指定说话人数量（如果已知）")
     parser.add_argument("--min-speakers", type=int, default=1, help="最小说话人数量")
     parser.add_argument("--max-speakers", type=int, default=5, help="最大说话人数量")
     
+    # 音频格式参数（新增）
+    parser.add_argument("--audio-format", choices=["auto", "wav", "flac", "none"], default="auto",
+                      help="音频格式处理方式: auto(自动检测并转换不兼容格式), wav(强制转换为WAV), "
+                           "flac(强制转换为FLAC), none(不进行转换)")
+    
+    # 环境与路径参数
+    env_group = parser.add_argument_group('环境与路径配置')
+    env_group.add_argument("--cuda-path", help="自定义CUDA安装路径")
+    env_group.add_argument("--cudnn-path", help="自定义cuDNN库路径")
+    env_group.add_argument("--ffmpeg-path", help="自定义FFmpeg可执行文件目录")
+    
+    # 保留旧参数 --cudnn 以保持向后兼容
+    env_group.add_argument("--cudnn", help="覆盖cuDNN库路径 (已弃用，请使用--cudnn-path)")
+    
     # 高级参数
     parser.add_argument("--verbose", "-v", action="store_true", help="启用详细日志")
-    parser.add_argument("--cudnn", help="覆盖cuDNN库路径")
+    parser.add_argument("--keep-temp-files", action="store_true", help="保留临时文件（不自动删除）")
     
     args = parser.parse_args()
     
@@ -1358,11 +1613,30 @@ def parse_arguments():
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     
-    # 处理命令行中的cuDNN路径覆盖
-    if args.cudnn and Path(args.cudnn).exists():
-        path_sep = ";" if os.name == "nt" else ":"
-        os.environ["PATH"] = args.cudnn + path_sep + os.environ.get("PATH", "")
-        logger.info(f"使用命令行指定的cuDNN路径: {args.cudnn}")
+    # 处理环境变量配置
+    global CUDA_PATH, CUDNN_PATH, FFMPEG_PATH
+    
+    # 处理CUDA路径
+    if args.cuda_path:
+        CUDA_PATH = args.cuda_path
+        add_path_to_env(CUDA_PATH, "CUDA")
+        # 设置CUDA_HOME环境变量
+        os.environ["CUDA_HOME"] = CUDA_PATH
+        os.environ["CUDA_PATH"] = CUDA_PATH
+    
+    # 处理cuDNN路径 (优先使用新参数)
+    if args.cudnn_path:
+        CUDNN_PATH = args.cudnn_path
+        add_path_to_env(CUDNN_PATH, "cuDNN")
+    elif args.cudnn:  # 向后兼容旧参数
+        CUDNN_PATH = args.cudnn
+        add_path_to_env(CUDNN_PATH, "cuDNN")
+        logger.warning("--cudnn参数已弃用，请使用--cudnn-path")
+    
+    # 处理FFmpeg路径
+    if args.ffmpeg_path:
+        FFMPEG_PATH = args.ffmpeg_path
+        add_path_to_env(FFMPEG_PATH, "FFmpeg")
     
     # 验证说话人分割参数
     if args.speakers and not args.speaker_model:
@@ -1403,6 +1677,7 @@ def process_single_file(args):
                 num_speakers=args.num_speakers,
                 min_speakers=args.min_speakers,
                 max_speakers=args.max_speakers,
+                audio_format=args.audio_format,
                 beam_size=args.beam_size,
                 language=args.language,
                 task=args.task,
@@ -1465,7 +1740,7 @@ def process_batch(args):
     
     # 查找所有音频文件
     audio_files = []
-    for ext in [".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus"]:
+    for ext in AudioProcessor.SUPPORTED_FORMATS:
         audio_files.extend(audio_path.glob(f"*{ext}"))
         # 同时检查大写扩展名
         audio_files.extend(audio_path.glob(f"*{ext.upper()}"))
@@ -1520,6 +1795,7 @@ def process_batch(args):
                         num_speakers=args.num_speakers,
                         min_speakers=args.min_speakers,
                         max_speakers=args.max_speakers,
+                        audio_format=args.audio_format,
                         beam_size=args.beam_size,
                         language=args.language,
                         task=args.task,
@@ -1567,7 +1843,21 @@ def main():
     # 显示环境信息
     logger.info(f"Python 版本: {sys.version}")
     logger.info(f"系统平台: {sys.platform}")
-    logger.info(f"cuDNN 路径: {CUDNN_PATH if CUDNN_PATH else '使用系统环境'}")
+    
+    # 显示主要组件路径
+    if CUDA_PATH:
+        logger.info(f"CUDA 路径: {CUDA_PATH}")
+    if CUDNN_PATH:
+        logger.info(f"cuDNN 路径: {CUDNN_PATH}")
+    if FFMPEG_PATH:
+        logger.info(f"FFmpeg 路径: {FFMPEG_PATH}")
+    
+    # 检查FFmpeg是否可用
+    ffmpeg_available = AudioProcessor.check_ffmpeg_available()
+    if ffmpeg_available:
+        logger.info("FFmpeg 可用: 将使用FFmpeg进行音频格式转换")
+    else:
+        logger.info("FFmpeg 不可用: 将使用soundfile进行音频格式转换")
     
     # 判断处理模式
     success = False
@@ -1575,6 +1865,12 @@ def main():
         success = process_batch(args)
     else:
         success = process_single_file(args)
+    
+    # 清理临时文件
+    if not args.keep_temp_files:
+        AudioProcessor.cleanup_temp_files()
+    else:
+        logger.info(f"已保留临时文件，共 {len(TEMP_FILES)} 个文件未删除")
     
     # 执行统计
     total_time = time.time() - start_time
