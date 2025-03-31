@@ -240,7 +240,7 @@ def upload_file_with_http(api_key, file_path, api_base_url=None, proxy=None, dis
         print(f"文件上传期间发生错误：{e}", file=sys.stderr)
         raise
 
-def generate_srt_with_http(api_key, model_name, file_uri, mime_type, system_prompt=None, api_base_url=None, proxy=None, disable_proxy=False, retries=3):
+def generate_srt_with_http(api_key, model_name, file_uri, mime_type, system_prompt=None, api_base_url=None, proxy=None, disable_proxy=False, retries=3, temperature=0.2, max_output_tokens=None, safety_settings=None):
     """
     使用HTTP请求调用Gemini API生成SRT转录文本
     
@@ -254,6 +254,9 @@ def generate_srt_with_http(api_key, model_name, file_uri, mime_type, system_prom
         proxy (str, optional): 代理URL
         disable_proxy (bool): 如果为True，则禁用所有代理
         retries (int): 最大重试次数
+        temperature (float): 生成温度，控制随机性 (0.0-1.0)
+        max_output_tokens (int, optional): 最大输出标记数
+        safety_settings (list, optional): 安全设置列表
         
     返回:
         str: 生成的SRT内容
@@ -282,6 +285,26 @@ def generate_srt_with_http(api_key, model_name, file_uri, mime_type, system_prom
             ]
         }
         print("已应用系统提示。")
+    
+    # 添加生成配置
+    generation_config = {}
+    
+    if temperature is not None:
+        generation_config["temperature"] = temperature
+        
+    if max_output_tokens is not None:
+        generation_config["maxOutputTokens"] = max_output_tokens
+    
+    # 只有当有配置时才添加generationConfig字段
+    if generation_config:
+        request_body["generationConfig"] = generation_config
+        print(f"已应用生成配置: 温度={temperature}" + 
+              (f", 最大输出标记数={max_output_tokens}" if max_output_tokens else ""))
+    
+    # 添加安全设置
+    if safety_settings:
+        request_body["safetySettings"] = safety_settings
+        print("已应用自定义安全设置。")
     
     print(f"开始生成SRT内容，使用模型：{model_name}")
     print(f"使用API端点：{base_url}")
@@ -364,6 +387,18 @@ def main():
     output_group = parser.add_argument_group('输出选项')
     output_group.add_argument("--output-format", choices=["srt", "txt"], default="srt", 
                             help="输出格式，默认为SRT格式，也可选择纯文本格式")
+    
+    # 生成参数选项
+    generation_group = parser.add_argument_group('生成参数')
+    generation_group.add_argument("--temperature", type=float, default=0.6, 
+                               help="生成温度，用于控制输出的随机性。范围0-1，0为最确定性，1为最随机。默认0.6")
+    generation_group.add_argument("--max-output-tokens", type=int,
+                               help="生成内容的最大标记数。限制生成内容的长度，默认不限制。")
+    generation_group.add_argument("--enable-safety", action="store_true",
+                               help="启用内置的安全过滤器。默认为关闭状态，即不过滤任何内容。")
+    generation_group.add_argument("--safety-threshold", choices=["BLOCK_NONE", "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_ONLY_HIGH"], 
+                               default="BLOCK_MEDIUM_AND_ABOVE",
+                               help="设置安全过滤阈值，仅在启用安全过滤时生效。默认为BLOCK_MEDIUM_AND_ABOVE(中级及以上会被过滤)")
 
     args = parser.parse_args()
 
@@ -447,6 +482,27 @@ def main():
                     print(f"尝试重新生成内容，第 {retries_counter+1} 次尝试...")
                     time.sleep(3 * retries_counter)  # 指数退避
                     
+                # 准备安全设置 - 默认为禁用（全部设为BLOCK_NONE）
+                safety_settings = [
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}
+                ]
+                
+                # 如果用户选择启用安全设置
+                if args.enable_safety:
+                    # 使用用户指定的阈值
+                    safety_settings = [
+                        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": args.safety_threshold},
+                        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": args.safety_threshold},
+                        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": args.safety_threshold},
+                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": args.safety_threshold}
+                    ]
+                    print(f"已启用安全过滤，阈值设置为: {args.safety_threshold}")
+                else:
+                    print("安全过滤已禁用。")
+                
                 srt_content = generate_srt_with_http(
                     api_key=args.api_key,
                     model_name=args.model,
@@ -456,7 +512,10 @@ def main():
                     api_base_url=args.api_base_url,
                     proxy=args.proxy,
                     disable_proxy=args.no_proxy,
-                    retries=args.retries
+                    retries=args.retries,
+                    temperature=args.temperature,
+                    max_output_tokens=args.max_output_tokens,
+                    safety_settings=safety_settings
                 )
                 generate_success = True
             except requests.exceptions.ProxyError as e:
@@ -547,4 +606,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
