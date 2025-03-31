@@ -161,20 +161,20 @@ def parse_last_timestamp(srt_content):
     
     return last_timestamp, total_seconds
 
-# --- 文件处理函数 ---
+# --- SRT合并函数 ---
 
-def append_new_content(first_file, second_file, output_file, overlap_seconds=5):
+def merge_srt_files(first_file, second_file, output_file, overlap_seconds=5):
     """
-    将第二个文件内容追加到第一个文件后
+    合并两个SRT文件，处理可能的重叠部分
     
     参数:
-        first_file (str): 第一个文件路径
-        second_file (str): 第二个文件路径
-        output_file (str): 输出文件路径 (通常与first_file相同)
-        overlap_seconds (float): 重叠时间（仅用于日志显示）
+        first_file (str): 第一个SRT文件路径
+        second_file (str): 第二个SRT文件路径
+        output_file (str): 合并后的输出文件路径
+        overlap_seconds (float): 重叠时间容忍度（秒）
         
     返回:
-        bool: 追加是否成功
+        bool: 合并是否成功
     """
     try:
         # 读取两个文件内容
@@ -184,29 +184,59 @@ def append_new_content(first_file, second_file, output_file, overlap_seconds=5):
         with open(second_file, 'r', encoding='utf-8') as f:
             second_content = f.read()
         
-        # 如果是SRT文件，尝试检查最后时间戳（仅用于日志显示）
-        if first_file.lower().endswith('.srt') and second_file.lower().endswith('.srt'):
-            try:
-                _, last_time_seconds = parse_last_timestamp(first_content)
-                print(f"最后时间戳: {format_timestamp(last_time_seconds)}")
-            except:
-                pass
+        # 解析第一个文件的最后时间戳
+        _, last_time_seconds = parse_last_timestamp(first_content)
         
-        # 简单追加内容
-        with open(output_file, 'a', encoding='utf-8') as f:
-            # 如果第一个文件不是空的且不以换行结束，添加换行
-            if first_content and not first_content.endswith('\n'):
-                f.write('\n')
-            # 如果是SRT文件，为了保持格式，添加一个空行
-            if output_file.lower().endswith('.srt') and not second_content.startswith('\n'):
-                f.write('\n')
-            f.write(second_content)
+        # 解析第二个文件的条目
+        second_entries = []
+        entry_pattern = r'(\d+)\s+(\d+:\d+:\d+,\d+) --> (\d+:\d+:\d+,\d+)\s+([\s\S]+?)(?=\n\n\d+|\Z)'
+        for match in re.finditer(entry_pattern, second_content):
+            entry_num = int(match.group(1))
+            start_time = match.group(2)
+            end_time = match.group(3)
+            text = match.group(4).strip()
+            
+            # 转换开始时间为秒
+            start_seconds = parse_timestamp(start_time)
+            
+            second_entries.append({
+                'num': entry_num,
+                'start_time': start_time,
+                'end_time': end_time,
+                'start_seconds': start_seconds,
+                'text': text
+            })
         
-        print(f"成功将内容从 {second_file} 追加到 {output_file}")
+        # 过滤掉时间上重叠的部分
+        filtered_entries = [e for e in second_entries if e['start_seconds'] > last_time_seconds - overlap_seconds]
+        
+        if not filtered_entries:
+            print("第二个文件中没有新的内容需要合并。")
+            return False
+        
+        # 准备合并内容
+        # 获取第一个文件的最后条目编号
+        last_entry_num = 0
+        entry_nums = re.findall(r'^\d+', first_content, re.MULTILINE)
+        if entry_nums:
+            last_entry_num = int(entry_nums[-1])
+        
+        # 合并文件内容
+        merged_content = first_content.rstrip() + "\n\n"
+        
+        for i, entry in enumerate(filtered_entries):
+            merged_content += f"{last_entry_num + i + 1}\n"
+            merged_content += f"{entry['start_time']} --> {entry['end_time']}\n"
+            merged_content += f"{entry['text']}\n\n"
+        
+        # 写入合并后的内容
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(merged_content)
+        
         return True
     
     except Exception as e:
-        print(f"追加文件时出错: {e}", file=sys.stderr)
+        print(f"合并SRT文件时出错: {e}", file=sys.stderr)
         return False
 
 # --- 辅助函数 ---
@@ -627,24 +657,11 @@ def main():
         if system_prompt_content is None:
             print(f"警告：无法获取系统提示，将不使用系统提示继续。", file=sys.stderr)
 
-    # 调整输出文件扩展名，确保与请求的格式匹配
-    output_path = args.output
-    if args.output_format == "txt" and output_path.lower().endswith('.srt'):
-        output_path = output_path.rsplit('.', 1)[0] + '.txt'
-        print(f"已调整输出文件路径为: {output_path}")
-    elif args.output_format == "srt" and not output_path.lower().endswith(('.srt')):
-        if '.' in output_path:
-            output_path = output_path.rsplit('.', 1)[0] + '.srt'
-        else:
-            output_path = output_path + '.srt'
-        print(f"已调整输出文件路径为: {output_path}")
-
     # 处理自动续写逻辑
     if args.auto_continue or args.continue_from:
         start_time = None
-        original_output = output_path
-        temp_output_base = os.path.splitext(output_path)[0]
-        output_ext = os.path.splitext(original_output)[1]  # 获取原始输出文件的扩展名
+        original_output = args.output
+        temp_output_base = os.path.splitext(args.output)[0]
         
         # 如果指定了continue_from参数，解析时间
         if args.continue_from:
@@ -656,20 +673,16 @@ def main():
                 print(f"解析时间字符串失败: {args.continue_from}，将自动检测继续点", file=sys.stderr)
         
         # 如果启用自动续写但没有指定起始点，检查现有文件
-        if args.auto_continue and not start_time and os.path.exists(original_output):
+        if args.auto_continue and not start_time and os.path.exists(args.output):
             try:
-                with open(original_output, 'r', encoding='utf-8') as f:
+                with open(args.output, 'r', encoding='utf-8') as f:
                     existing_content = f.read()
                 
-                # 如果是SRT文件，尝试解析时间戳
-                if original_output.lower().endswith('.srt'):
-                    last_timestamp, last_seconds = parse_last_timestamp(existing_content)
-                    if last_timestamp:
-                        # 回退一点时间，确保连贯性
-                        start_time = max(0, last_seconds - args.overlap_seconds)
-                        print(f"检测到现有文件，将从 {format_timestamp(start_time)} 继续")
-                else:
-                    print("现有文件不是SRT格式，无法自动检测时间点。将从头开始处理，并追加到现有内容。")
+                last_timestamp, last_seconds = parse_last_timestamp(existing_content)
+                if last_timestamp:
+                    # 回退一点时间，确保连贯性
+                    start_time = max(0, last_seconds - args.overlap_seconds)
+                    print(f"检测到现有文件，将从 {format_timestamp(start_time)} 继续")
             except Exception as e:
                 print(f"检查现有文件失败: {e}", file=sys.stderr)
         
@@ -682,8 +695,8 @@ def main():
         current_start_time = start_time
         
         while attempt_count < args.max_attempts:
-            # 为每次尝试创建临时输出文件，使用与输出文件相同的扩展名
-            temp_output = f"{temp_output_base}_part{attempt_count + 1}{output_ext}"
+            # 为每次尝试创建临时输出文件
+            temp_output = f"{temp_output_base}_part{attempt_count + 1}.srt"
             
             try:
                 print(f"\n--- 处理尝试 {attempt_count + 1}/{args.max_attempts} ---")
@@ -798,72 +811,61 @@ def main():
                 if output_dir:
                     os.makedirs(output_dir, exist_ok=True)
                 
-                # 保存为临时文件
                 with open(temp_output, 'w', encoding='utf-8') as f:
                     f.write(srt_content)
                 
-                # 如果是第一次尝试且没有现有文件，直接使用结果
+                # 如果这是第一次尝试且没有现有文件，直接使用结果
                 if attempt_count == 0 and not os.path.exists(original_output):
                     with open(original_output, 'w', encoding='utf-8') as f:
                         f.write(srt_content)
                     print(f"保存初始结果到 {original_output}")
                 else:
-                    # 否则，追加结果
-                    print(f"追加结果到 {original_output}")
+                    # 否则，合并结果
+                    print(f"合并结果到 {original_output}")
                     if not os.path.exists(original_output):
                         # 如果主输出文件不存在，直接复制第一个部分
                         with open(temp_output, 'r', encoding='utf-8') as f_in:
                             with open(original_output, 'w', encoding='utf-8') as f_out:
                                 f_out.write(f_in.read())
-                        print(f"创建初始文件 {original_output}")
                     else:
-                        # 追加到主输出文件
-                        append_successful = append_new_content(
+                        # 合并到主输出文件
+                        merge_successful = merge_srt_files(
                             original_output, 
                             temp_output, 
                             original_output, 
                             args.overlap_seconds
                         )
-                        if not append_successful:
-                            print("追加内容失败，停止处理")
+                        if not merge_successful:
+                            print("没有新内容需要合并，可能已处理完毕")
                             break
                 
                 # 检查这一段的最后时间戳，准备下一次处理
-                # 只有SRT文件才检查时间戳
-                last_seconds = None
-                if temp_output.lower().endswith('.srt'):
-                    with open(temp_output, 'r', encoding='utf-8') as f:
-                        temp_content = f.read()
-                    
-                    last_timestamp, last_seconds = parse_last_timestamp(temp_content)
-                    
-                    if not last_timestamp:
-                        print("未找到有效的时间戳，停止处理")
-                        break
-                    
-                    # 检查是否有进展
-                    if current_start_time and last_seconds - current_start_time < 10:
-                        print("处理未取得明显进展，可能已到达音频末尾或遇到解析问题")
-                        break
-                    
-                    # 更新下一次处理的起始时间
-                    current_start_time = max(0, last_seconds - args.overlap_seconds)
-                    
-                    print(f"当前处理进度: {format_timestamp(last_seconds)}")
-                    print(f"下一次将从 {format_timestamp(current_start_time)} 继续")
-                else:
-                    # 非SRT文件不能自动检测进度，依赖用户判断是否继续
-                    print("非SRT格式输出，无法自动检测进度。继续处理下一段...")
+                with open(temp_output, 'r', encoding='utf-8') as f:
+                    temp_content = f.read()
                 
-                # 增加尝试计数
+                last_timestamp, last_seconds = parse_last_timestamp(temp_content)
+                
+                if not last_timestamp:
+                    print("未找到有效的时间戳，停止处理")
+                    break
+                
+                # 检查是否有进展
+                if current_start_time and last_seconds - current_start_time < 10:
+                    print("处理未取得明显进展，可能已到达音频末尾或遇到解析问题")
+                    break
+                
+                # 更新下一次处理的起始时间
+                current_start_time = max(0, last_seconds - args.overlap_seconds)
+                
+                print(f"当前处理进度: {format_timestamp(last_seconds)}")
+                print(f"下一次将从 {format_timestamp(current_start_time)} 继续")
+                
                 attempt_count += 1
                 
-                # 如果是纯文本输出格式，在每次都进行转换
-                if args.output_format == "txt" and original_output.lower().endswith('.srt'):
-                    # 将SRT转换为纯文本
-                    txt_output = os.path.splitext(original_output)[0] + '.txt'
-                    print(f"将SRT转换为纯文本: {txt_output}")
-                    
+                # 如果是纯文本输出格式，在最后进行转换
+                if args.output_format == "txt" and os.path.exists(original_output):
+                    # 在所有处理完成后，将SRT转换为纯文本
+                    print("处理为纯文本格式...")
                     with open(original_output, 'r', encoding='utf-8') as f:
                         srt_content = f.read()
                     
@@ -884,13 +886,9 @@ def main():
                         print("警告：无法从SRT格式中提取纯文本，将保存原始内容。")
                     
                     # 保存为纯文本
+                    txt_output = original_output
                     with open(txt_output, 'w', encoding='utf-8') as f:
                         f.write(text_content)
-                
-                # 对于SRT文件，如果没有时间戳信息，停止处理
-                if temp_output.lower().endswith('.srt') and last_seconds is None:
-                    print("无法获取时间戳信息，停止自动处理。")
-                    break
                 
             except Exception as e:
                 print(f"处理过程中发生错误: {e}", file=sys.stderr)
@@ -898,7 +896,7 @@ def main():
                 traceback.print_exc()
                 
                 # 如果已经有部分结果，仍然可以尝试继续
-                if os.path.exists(original_output) and original_output.lower().endswith('.srt'):
+                if os.path.exists(original_output):
                     try:
                         with open(original_output, 'r', encoding='utf-8') as f:
                             existing_content = f.read()
@@ -921,7 +919,7 @@ def main():
         
         # 可选：清理临时文件
         # for i in range(attempt_count):
-        #     temp_file = f"{temp_output_base}_part{i + 1}{output_ext}"
+        #     temp_file = f"{temp_output_base}_part{i + 1}.srt"
         #     if os.path.exists(temp_file):
         #         os.remove(temp_file)
         
@@ -1030,13 +1028,13 @@ def main():
                 raise  # 其他错误直接抛出
 
         # 步骤 3：保存结果
-        print(f"\n步骤 3：将内容保存到 {output_path}...")
-        output_dir = os.path.dirname(output_path)
+        print(f"\n步骤 3：将内容保存到 {args.output}...")
+        output_dir = os.path.dirname(args.output)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
 
         # 如果请求纯文本格式，尝试从SRT格式中提取纯文本
-        if args.output_format == "txt":
+        if args.output_format == "txt" and "srt" in args.output.lower():
             print("处理为纯文本格式...")
             text_content = ""
             lines = srt_content.split('\n')
@@ -1054,16 +1052,16 @@ def main():
                 text_content = srt_content
                 print("警告：无法从SRT格式中提取纯文本，将保存原始内容。")
             
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(args.output, 'w', encoding='utf-8') as f:
                 f.write(text_content)
         else:
             # 保存原始SRT内容
-            with open(output_path, 'w', encoding='utf-8') as f:
+            with open(args.output, 'w', encoding='utf-8') as f:
                 f.write(srt_content)
 
         print("\n--- 内容生成完成 ---")
         print(f"输出格式：{'纯文本' if args.output_format == 'txt' else 'SRT字幕'}")
-        print(f"输出已保存至：{os.path.abspath(output_path)}")
+        print(f"输出已保存至：{os.path.abspath(args.output)}")
 
     except FileNotFoundError as e:
          print(f"\n错误：{e}", file=sys.stderr)
