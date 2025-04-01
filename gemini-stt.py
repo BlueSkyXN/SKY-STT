@@ -63,25 +63,31 @@ SYSTEM_PROMPT_PRESETS = {
 # --- 辅助函数 ---
 
 def get_mime_type(file_path):
-    """猜测文件的 MIME 类型。"""
+    """猜测文件的 MIME 类型，特别处理音频格式。"""
+    # 定义扩展名到 MIME 类型的映射
+    AUDIO_EXT_MIME_MAP = {
+        '.wav': 'audio/wav',
+        '.wave': 'audio/wav',
+        '.mp3': 'audio/mp3',
+        '.flac': 'audio/flac',
+        '.aac': 'audio/aac',       # 纯 AAC 文件
+        '.m4a': 'audio/aac',       # M4A 容器 (技术上是 audio/mp4，但使用 audio/aac 以兼容 API)
+        '.ogg': 'audio/ogg',
+        '.aiff': 'audio/aiff',     # 增加 AIFF 支持
+        '.aif': 'audio/aiff'
+    }
+    
     mime_type, _ = mimetypes.guess_type(file_path)
     if mime_type is None:
-        # 提供通用后备或引发错误
-        # 对于音频，常见的后备类型可能包括：
-        if file_path.lower().endswith(('.wav', '.wave')):
-            return 'audio/wav'
-        elif file_path.lower().endswith('.mp3'):
-            return 'audio/mp3'
-        elif file_path.lower().endswith(('.flac')):
-             return 'audio/flac'
-        elif file_path.lower().endswith(('.m4a')):
-             # M4A 文件通常包含 AAC 编码
-             return 'audio/aac' # 或 'audio/mp4'
-        elif file_path.lower().endswith(('.ogg')):
-             return 'audio/ogg'
-        else:
-            print(f"警告：无法确定文件 {os.path.basename(file_path)} 的 MIME 类型，将使用通用类型 'application/octet-stream'。", file=sys.stderr)
-            return 'application/octet-stream' # 通用二进制
+        # 获取小写的文件扩展名
+        file_ext = os.path.splitext(file_path.lower())[1]
+        
+        # 检查是否在我们的映射表中
+        if file_ext in AUDIO_EXT_MIME_MAP:
+            return AUDIO_EXT_MIME_MAP[file_ext]
+        
+        print(f"警告：无法确定文件 {os.path.basename(file_path)} 的 MIME 类型，将使用通用类型 'application/octet-stream'。", file=sys.stderr)
+        return 'application/octet-stream'  # 通用二进制
     return mime_type
 
 def get_system_prompt(preset_key=None, system_prompt_file=None):
