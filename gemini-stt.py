@@ -741,7 +741,7 @@ def delete_all_files_with_http(api_key, api_base_url=None, proxy=None, disable_p
     print(f"清理完成: 成功删除 {success_count} 个文件，失败 {failure_count} 个文件。")
     return success_count, failure_count
 
-def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_prompt=None, api_base_url=None, proxy=None, disable_proxy=False, retries=3, temperature=0.2, max_output_tokens=None, safety_settings=None):
+def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_prompt=None, api_base_url=None, proxy=None, disable_proxy=False, retries=3, temperature=0.2, max_output_tokens=None, safety_settings=None, file_uri=None):
     """
     使用HTTP请求调用Gemini API生成SRT转录文本
     
@@ -758,6 +758,7 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
         temperature (float): 生成温度，控制随机性 (0.0-1.0)
         max_output_tokens (int, optional): 最大输出标记数
         safety_settings (list, optional): 安全设置列表
+        file_uri (str, optional): 完整的文件URI，优先于file_name使用
         
     返回:
         str: 生成的SRT内容
@@ -769,14 +770,17 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
     if mime_type.startswith('video/'):
         user_prompt = "请识别这段视频中的音频内容，并严格按照 SRT 格式生成字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。如果视频中有重要的视觉内容，也可以在字幕中简要描述。"
     else:
-        user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。"
+        user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间码（格式：HH:MM:SS,mmm --> HH:MM:SS,mmm）和对应的文本。"
     
-    # 构建请求体
+    # 使用完整的file_uri如果提供了，否则使用file_name
+    uri_to_use = file_uri if file_uri else file_name
+    
+    # 构建请求体 - 使用下划线命名法，并使用完整的URI
     request_body = {
         "contents": [{
             "parts": [
                 {"text": user_prompt},
-                {"fileData": {"mimeType": mime_type, "fileId": file_name}}
+                {"file_data": {"mime_type": mime_type, "file_uri": uri_to_use}}
             ]
         }]
     }
@@ -812,6 +816,7 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
     
     print(f"开始生成SRT内容，使用模型：{model_name}")
     print(f"使用API端点：{base_url}")
+    print(f"使用文件URI：{uri_to_use}")
     
     try:
         # 创建会话
@@ -1267,10 +1272,11 @@ def main():
                 else:
                     print("安全过滤已禁用。")
                 
+                # *** 关键修改: 使用完整URI而不是文件ID ***
                 srt_content = generate_srt_with_http(
                     api_key=args.api_key,
                     model_name=args.model,
-                    file_name=file_name,
+                    file_name=file_name,  # 保留以兼容旧代码
                     mime_type=mime_type,
                     system_prompt=system_prompt_content,
                     api_base_url=args.api_base_url,
@@ -1279,7 +1285,8 @@ def main():
                     retries=args.retries,
                     temperature=args.temperature,
                     max_output_tokens=args.max_output_tokens,
-                    safety_settings=safety_settings
+                    safety_settings=safety_settings,
+                    file_uri=file_info.get("uri")  # 关键修改：传递完整URI
                 )
                 generate_success = True
             except requests.exceptions.ProxyError as e:
