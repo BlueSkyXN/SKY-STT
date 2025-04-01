@@ -59,7 +59,7 @@ SYSTEM_PROMPT_PRESETS = {
 # --- 辅助函数 ---
 
 def get_mime_type(file_path):
-    """猜测文件的 MIME 类型，特别处理音频格式。"""
+    """猜测文件的 MIME 类型，特别处理音频和视频格式。"""
     # 定义扩展名到 MIME 类型的映射
     AUDIO_EXT_MIME_MAP = {
         '.wav': 'audio/wav',
@@ -73,14 +73,32 @@ def get_mime_type(file_path):
         '.aif': 'audio/aiff'
     }
     
+    # 添加视频文件扩展名到 MIME 类型的映射
+    VIDEO_EXT_MIME_MAP = {
+        '.mp4': 'video/mp4',
+        '.mpeg': 'video/mpeg',
+        '.mpg': 'video/mpg',
+        '.mov': 'video/mov',
+        '.avi': 'video/avi',
+        '.flv': 'video/x-flv',
+        '.webm': 'video/webm',
+        '.wmv': 'video/wmv',
+        '.3gp': 'video/3gpp',
+        '.mkv': 'video/x-matroska'  # 常见格式，但文档中未列出
+    }
+    
     mime_type, _ = mimetypes.guess_type(file_path)
     if mime_type is None:
         # 获取小写的文件扩展名
         file_ext = os.path.splitext(file_path.lower())[1]
         
-        # 检查是否在我们的映射表中
+        # 检查是否在音频映射表中
         if file_ext in AUDIO_EXT_MIME_MAP:
             return AUDIO_EXT_MIME_MAP[file_ext]
+        
+        # 检查是否在视频映射表中
+        if file_ext in VIDEO_EXT_MIME_MAP:
+            return VIDEO_EXT_MIME_MAP[file_ext]
         
         print(f"警告：无法确定文件 {os.path.basename(file_path)} 的 MIME 类型，将使用通用类型 'application/octet-stream'。", file=sys.stderr)
         return 'application/octet-stream'  # 通用二进制
@@ -143,6 +161,119 @@ def normalize_file_id(file_id):
     # 否则，添加 "files/" 前缀
     return f"files/{file_id}"
 
+def print_file_info(file_info, detailed=False):
+    """
+    打印文件信息
+    
+    参数:
+        file_info (dict): 文件信息字典
+        detailed (bool): 是否显示详细信息
+    """
+    if not file_info:
+        print("未找到文件信息")
+        return
+    
+    print("\n" + "=" * 80)
+    print(f"文件信息:")
+    print("-" * 80)
+    
+    # 基本信息
+    file_id = file_info.get("name", "未知").replace("files/", "")
+    display_name = file_info.get("displayName", "未知")
+    mime_type = file_info.get("mimeType", "未知")
+    state = file_info.get("state", "未知")
+    size_bytes = file_info.get("sizeBytes", "未知")
+    
+    # 尝试转换文件大小为人类可读格式
+    if size_bytes != "未知":
+        try:
+            size_bytes_int = int(size_bytes)
+            # 转换为适当的单位 (B, KB, MB, GB)
+            units = ['B', 'KB', 'MB', 'GB']
+            size_index = 0
+            size_human = float(size_bytes_int)
+            
+            while size_human >= 1024 and size_index < len(units) - 1:
+                size_human /= 1024
+                size_index += 1
+                
+            size_display = f"{size_human:.2f} {units[size_index]} ({size_bytes} 字节)"
+        except:
+            size_display = size_bytes
+    else:
+        size_display = "未知"
+    
+    # 格式化时间
+    create_time = file_info.get("createTime", "未知")
+    update_time = file_info.get("updateTime", "未知")
+    expiration_time = file_info.get("expirationTime", "未知")
+    
+    for time_str in [create_time, update_time, expiration_time]:
+        if time_str != "未知":
+            try:
+                dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                formatted_time = time_str
+    
+    # 打印基本信息
+    print(f"文件ID      : {file_id}")
+    print(f"显示名称    : {display_name}")
+    print(f"MIME类型    : {mime_type}")
+    print(f"状态        : {state}")
+    print(f"文件大小    : {size_display}")
+    print(f"创建时间    : {create_time if create_time == '未知' else formatted_time}")
+    
+    # URI信息
+    uri = file_info.get("uri", "未知")
+    if uri != "未知":
+        print(f"文件URI     : {uri}")
+    
+    # 视频元数据
+    video_metadata = file_info.get("videoMetadata", {})
+    if video_metadata:
+        video_duration = video_metadata.get("videoDuration", "未知")
+        if video_duration != "未知":
+            # 将"1.234s"格式转换为易读格式
+            try:
+                seconds = float(video_duration.replace("s", ""))
+                minutes, seconds = divmod(seconds, 60)
+                hours, minutes = divmod(minutes, 60)
+                if hours > 0:
+                    duration_display = f"{int(hours)}时{int(minutes)}分{seconds:.2f}秒"
+                elif minutes > 0:
+                    duration_display = f"{int(minutes)}分{seconds:.2f}秒"
+                else:
+                    duration_display = f"{seconds:.2f}秒"
+                
+                print(f"视频时长    : {duration_display} ({video_duration})")
+            except:
+                print(f"视频时长    : {video_duration}")
+    
+    # 详细信息(如果requested)
+    if detailed:
+        print("\n详细信息:")
+        print("-" * 80)
+        print(f"更新时间    : {update_time if update_time == '未知' else formatted_time}")
+        print(f"过期时间    : {expiration_time if expiration_time == '未知' else formatted_time}")
+        
+        source = file_info.get("source", "未知")
+        print(f"文件来源    : {source}")
+        
+        hash_value = file_info.get("sha256Hash", "未知")
+        if hash_value != "未知":
+            print(f"SHA-256哈希  : {hash_value}")
+        
+        # 错误信息(如果有)
+        error = file_info.get("error", None)
+        if error:
+            error_code = error.get("code", "未知")
+            error_message = error.get("message", "未知")
+            print(f"错误代码    : {error_code}")
+            print(f"错误信息    : {error_message}")
+    
+    print("=" * 80)
+
 # --- API 交互函数 ---
 
 def get_session(proxy=None, disable_proxy=False, retries=3):
@@ -204,6 +335,94 @@ def list_files_with_http(api_key, api_base_url=None, proxy=None, disable_proxy=F
         print(f"获取文件列表时出错：{e}", file=sys.stderr)
         raise
 
+def get_file_info_with_http(api_key, file_name, api_base_url=None, proxy=None, disable_proxy=False, retries=3):
+    """
+    直接通过API获取文件信息
+    
+    参数:
+        api_key (str): API密钥
+        file_name (str): 文件名称 (格式: files/{file_id})
+        api_base_url (str, optional): 自定义API基础URL
+        proxy (str, optional): 代理URL
+        disable_proxy (bool): 如果为True，则禁用所有代理
+        retries (int): 最大重试次数
+        
+    返回:
+        dict or None: 文件信息，如果请求失败则返回None
+    """
+    # 确保文件名使用正确的格式
+    if not file_name.startswith("files/"):
+        file_name = f"files/{file_name}"
+    
+    # 使用自定义API基础URL或默认URL
+    base_url = f"{api_base_url.rstrip('/')}/v1beta/{file_name}" if api_base_url else f"https://generativelanguage.googleapis.com/v1beta/{file_name}"
+    
+    print(f"获取文件信息，使用API端点：{base_url}")
+    
+    try:
+        session = get_session(proxy, disable_proxy, retries)
+        response = session.get(f"{base_url}?key={api_key}", timeout=60)
+        
+        if response.status_code != 200:
+            print(f"获取文件信息失败: {response.status_code} {response.text}")
+            return None
+        
+        file_info = response.json()
+        print(f"成功获取文件信息: {file_name}")
+        return file_info
+    
+    except Exception as e:
+        print(f"获取文件信息时出错：{e}", file=sys.stderr)
+        return None
+
+def find_file_by_name(api_key, display_name, api_base_url=None, proxy=None, disable_proxy=False, retries=3):
+    """
+    通过显示名称查找文件
+    
+    参数:
+        api_key (str): API密钥
+        display_name (str): 文件显示名称
+        api_base_url (str, optional): 自定义API基础URL
+        proxy (str, optional): 代理URL
+        disable_proxy (bool): 如果为True，则禁用所有代理
+        retries (int): 最大重试次数
+        
+    返回:
+        dict or None: 文件信息，如果未找到则返回None
+    """
+    print(f"根据显示名称查找文件：{display_name}")
+    
+    # 获取所有文件列表
+    files = list_files_with_http(
+        api_key=api_key,
+        api_base_url=api_base_url,
+        proxy=proxy,
+        disable_proxy=disable_proxy,
+        retries=retries
+    )
+    
+    # 首先尝试完全匹配
+    for file_info in files:
+        if file_info.get("displayName") == display_name:
+            print(f"找到完全匹配的文件：{file_info.get('displayName')}")
+            return file_info
+    
+    # 如果没有完全匹配，则找出最接近的部分匹配
+    closest_match = None
+    
+    for file_info in files:
+        if display_name.lower() in file_info.get("displayName", "").lower():
+            # 如果还没有匹配，或者当前文件更接近完全匹配
+            if closest_match is None or len(file_info.get("displayName")) < len(closest_match.get("displayName")):
+                closest_match = file_info
+    
+    if closest_match:
+        print(f"找到部分匹配的文件：{closest_match.get('displayName')}")
+        return closest_match
+    
+    print("未找到匹配的文件")
+    return None
+
 def find_file_by_name_or_id(api_key, name_or_id, api_base_url=None, proxy=None, disable_proxy=False, retries=3):
     """
     通过名称或ID查找文件
@@ -220,23 +439,41 @@ def find_file_by_name_or_id(api_key, name_or_id, api_base_url=None, proxy=None, 
         dict or None: 文件信息，如果未找到则返回None
     """
     print(f"查找文件：{name_or_id}")
-    files = list_files_with_http(api_key, api_base_url, proxy, disable_proxy, retries)
     
-    # 先尝试将name_or_id当作ID处理
+    # 如果提供的是完整的file_id格式，可以直接尝试获取文件信息
     if name_or_id.startswith("files/"):
-        file_id = name_or_id
-    else:
-        file_id = f"files/{name_or_id}"
-    
-    # 检查是否有完全匹配的ID
-    for file_info in files:
-        if file_info.get("name") == file_id:
-            print(f"找到完全匹配的文件ID：{file_info.get('name')}")
+        file_info = get_file_info_with_http(
+            api_key=api_key,
+            file_name=name_or_id,
+            api_base_url=api_base_url,
+            proxy=proxy,
+            disable_proxy=disable_proxy,
+            retries=retries
+        )
+        if file_info:
             return file_info
+    
+    # 如果提供的是简单的file_id（不包含"files/"前缀）
+    simple_file_id = name_or_id
+    if not name_or_id.startswith("files/"):
+        file_name = f"files/{name_or_id}"
+        file_info = get_file_info_with_http(
+            api_key=api_key,
+            file_name=file_name,
+            api_base_url=api_base_url,
+            proxy=proxy,
+            disable_proxy=disable_proxy,
+            retries=retries
+        )
+        if file_info:
+            return file_info
+    
+    # 如果上述方法都失败，则尝试搜索文件列表
+    files = list_files_with_http(api_key, api_base_url, proxy, disable_proxy, retries)
     
     # 检查ID中是否包含给定的部分ID
     for file_info in files:
-        if name_or_id in file_info.get("name", ""):
+        if simple_file_id in file_info.get("name", ""):
             print(f"找到部分匹配的文件ID：{file_info.get('name')}")
             return file_info
     
@@ -268,11 +505,11 @@ def upload_file_with_http(api_key, file_path, api_base_url=None, proxy=None, dis
         retries (int): 最大重试次数
         
     返回:
-        tuple: (_, 文件名称, 文件MIME类型)
-        注意: 第一个返回值保留为None，以保持接口兼容
+        tuple: (file_info, 文件名称, 文件MIME类型)
+        注意: 第一个返回值为文件信息字典，以保持与先前版本的接口兼容性
     """
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"音频文件未找到：{file_path}")
+        raise FileNotFoundError(f"文件未找到：{file_path}")
     
     # 使用自定义API基础URL或默认URL
     base_url = f"{api_base_url.rstrip('/')}/upload/v1beta/files" if api_base_url else "https://generativelanguage.googleapis.com/upload/v1beta/files"
@@ -281,6 +518,7 @@ def upload_file_with_http(api_key, file_path, api_base_url=None, proxy=None, dis
     display_name = os.path.basename(file_path)
     
     print(f"开始上传文件：{file_path}")
+    print(f"文件类型：{mime_type}")
     print(f"使用API端点：{base_url}")
     
     try:
@@ -344,7 +582,17 @@ def upload_file_with_http(api_key, file_path, api_base_url=None, proxy=None, dis
         print(f"文件上传成功。文件ID：{file_name}")
         print(f"文件完整路径：{file_name}")
         
-        return None, file_name, mime_type
+        # 使用get_file_info_with_http获取完整的文件信息
+        complete_file_info = get_file_info_with_http(
+            api_key=api_key,
+            file_name=file_name,
+            api_base_url=api_base_url,
+            proxy=proxy,
+            disable_proxy=disable_proxy,
+            retries=retries
+        )
+        
+        return complete_file_info, file_name, mime_type
     
     except Exception as e:
         print(f"文件上传期间发生错误：{e}", file=sys.stderr)
@@ -434,7 +682,6 @@ def delete_all_files_with_http(api_key, api_base_url=None, proxy=None, disable_p
         if create_time != "未知":
             try:
                 # 将ISO 8601格式的时间转换为更易读的格式
-                from datetime import datetime
                 dt = datetime.fromisoformat(create_time.replace('Z', '+00:00'))
                 create_time = dt.strftime("%Y-%m-%d %H:%M")
             except:
@@ -518,8 +765,11 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
     # 使用自定义API基础URL或默认URL
     base_url = f"{api_base_url.rstrip('/')}/v1beta/models/{model_name}:generateContent" if api_base_url else f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     
-    # 定义用户提示
-    user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。"
+    # 定义用户提示，根据MIME类型自动调整
+    if mime_type.startswith('video/'):
+        user_prompt = "请识别这段视频中的音频内容，并严格按照 SRT 格式生成字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。如果视频中有重要的视觉内容，也可以在字幕中简要描述。"
+    else:
+        user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。"
     
     # 构建请求体
     request_body = {
@@ -577,7 +827,7 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
             f"{base_url}?key={api_key}",
             headers=headers,
             json=request_body,
-            timeout=600  # 音频转录可能需要更长时间
+            timeout=600  # 音频/视频转录可能需要更长时间
         )
         
         if response.status_code != 200:
@@ -616,24 +866,86 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
 
 # --- 主执行逻辑 ---
 
+def wait_for_file_processing(api_key, file_name, mime_type, api_base_url=None, proxy=None, disable_proxy=False, retries=3):
+    """
+    等待文件处理完成（特别是对视频文件）
+    
+    参数:
+        api_key (str): API密钥
+        file_name (str): 文件名称
+        mime_type (str): 文件的MIME类型
+        api_base_url (str, optional): 自定义API基础URL
+        proxy (str, optional): 代理URL
+        disable_proxy (bool): 如果为True，则禁用所有代理
+        retries (int): 最大重试次数
+        
+    返回:
+        bool: 文件是否处理完成并准备好使用
+    """
+    # 只有视频文件需要等待处理
+    if not mime_type.startswith('video/'):
+        return True
+    
+    print("\n等待视频文件处理完成...")
+    file_ready = False
+    max_wait_attempts = 30  # 最多等待30次
+    wait_count = 0
+    
+    while not file_ready and wait_count < max_wait_attempts:
+        try:
+            # 获取文件信息
+            file_info = get_file_info_with_http(
+                api_key=api_key,
+                file_name=file_name,
+                api_base_url=api_base_url,
+                proxy=proxy,
+                disable_proxy=disable_proxy,
+                retries=retries
+            )
+            
+            if file_info and file_info.get("state") == "ACTIVE":
+                file_ready = True
+                print("视频文件处理完成，状态为ACTIVE。")
+                return True
+            elif file_info and file_info.get("state") == "FAILED":
+                error_info = file_info.get("error", {})
+                error_message = error_info.get("message", "未知错误")
+                raise Exception(f"视频文件处理失败，状态为FAILED。错误信息：{error_message}")
+            else:
+                state = file_info.get("state", "UNKNOWN") if file_info else "UNKNOWN"
+                wait_count += 1
+                print(f"视频处理中... 当前状态: {state} ({wait_count}/{max_wait_attempts})")
+                time.sleep(10)  # 等待10秒再检查
+        except Exception as e:
+            wait_count += 1
+            print(f"检查文件状态时出错: {e}，将重试... ({wait_count}/{max_wait_attempts})")
+            time.sleep(5)
+    
+    if not file_ready:
+        print("视频文件处理超时，但将继续尝试使用。")
+    
+    return file_ready
+
 def main():
-    parser = argparse.ArgumentParser(description="使用 Gemini API 生成 SRT 字幕（多源支持版）。")
+    parser = argparse.ArgumentParser(description="使用 Gemini API 生成 SRT 字幕（支持音频和视频文件）。")
     
     # 文件输入选项组 - 三种输入方式是互斥的
     file_input_group = parser.add_mutually_exclusive_group(required=True)
-    file_input_group.add_argument("--audio", help="本地音频文件的路径。")
+    file_input_group.add_argument("--input", help="本地音频或视频文件的路径。")
     file_input_group.add_argument("--file-id", help="远程文件的ID，可以是URL后缀(如'abc123')或完整格式(如'files/abc123')。")
     file_input_group.add_argument("--file-name", help="远程文件的显示名称，用于查找文件。")
     
-    parser.add_argument("--output", required=True, help="保存输出 SRT 文件的路径。")
+    parser.add_argument("--output", help="保存输出 SRT 文件的路径。")
     parser.add_argument("--api-key", required=True, help="您的 Gemini API 密钥。")
     parser.add_argument("--model", default="gemini-1.5-flash-latest", help="要使用的 Gemini 模型名称 (例如 gemini-1.5-pro-latest)。")
-    parser.add_argument("--mime-type", help="文件的MIME类型，仅当使用远程文件且无法自动检测时才需要。例如：audio/mp3, audio/wav")
+    parser.add_argument("--mime-type", help="文件的MIME类型，仅当API无法检测时才使用。例如：audio/mp3, audio/wav, video/mp4")
     
     # 文件管理选项
     file_mgmt_group = parser.add_argument_group('文件管理选项')
     file_mgmt_group.add_argument("--auto-delete", action="store_true", help="处理完毕后自动删除使用的远程文件。")
     file_mgmt_group.add_argument("--clear-all-files", action="store_true", help="处理完毕后清空所有远程文件（慎用）。")
+    file_mgmt_group.add_argument("--check-first", action="store_true", help="上传前检查远程是否已存在同名文件，如有则直接使用。")
+    file_mgmt_group.add_argument("--upload-only", action="store_true", help="只上传文件并输出文件信息，不进行AI处理。")
     
     # 系统提示相关参数
     prompt_group = parser.add_argument_group('系统提示选项')
@@ -653,6 +965,7 @@ def main():
     output_group = parser.add_argument_group('输出选项')
     output_group.add_argument("--output-format", choices=["srt", "txt"], default="srt", 
                             help="输出格式，默认为SRT格式，也可选择纯文本格式")
+    output_group.add_argument("--detailed-info", action="store_true", help="显示文件的详细信息")
     
     # 生成参数选项
     generation_group = parser.add_argument_group('生成参数')
@@ -668,19 +981,36 @@ def main():
 
     args = parser.parse_args()
 
-    print(f"--- 开始生成 SRT 字幕 ---")
+    # 确保在非upload-only模式时有输出路径
+    if not args.upload_only and not args.output:
+        print("错误：必须指定 --output 参数（除非使用 --upload-only 模式）")
+        sys.exit(1)
+
+    print(f"--- Gemini 媒体处理工具 ---")
     print(f"时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 显示输入信息
-    if args.audio:
-        print(f"输入：本地音频文件 {args.audio}")
+    if args.input:
+        mime_type = get_mime_type(args.input)
+        if mime_type.startswith('video/'):
+            print(f"输入：本地视频文件 {args.input} (类型: {mime_type})")
+        else:
+            print(f"输入：本地音频文件 {args.input} (类型: {mime_type})")
     elif args.file_id:
         print(f"输入：远程文件ID {args.file_id}")
     else:
         print(f"输入：远程文件名称 {args.file_name}")
     
-    print(f"输出文件：{args.output}")
+    if args.output:
+        print(f"输出文件：{args.output}")
+    
     print(f"模型：{args.model}")
+    
+    # 运行模式
+    if args.upload_only:
+        print("运行模式：仅上传文件（不进行AI处理）")
+    if args.check_first:
+        print("启用检查：上传前检查远程是否存在同名文件")
     
     # 文件管理信息
     if args.auto_delete:
@@ -704,7 +1034,8 @@ def main():
     else:
         print(f"使用默认API基础URL：https://generativelanguage.googleapis.com")
     
-    print(f"输出格式：{args.output_format}")
+    if not args.upload_only:
+        print(f"输出格式：{args.output_format}")
 
     # 获取系统提示内容
     system_prompt_content = None
@@ -720,76 +1051,188 @@ def main():
         # 声明变量以跟踪文件信息
         file_name = None
         mime_type = None
+        file_info = None
         
         # 步骤 1：获取文件引用（上传本地文件或查找远程文件）
-        if args.audio:
-            # 路径A：上传本地文件
-            print("\n步骤 1：使用 HTTP 请求上传音频文件...")
-            retries_counter = 0
-            max_upload_attempts = 3
-            upload_success = False
+        if args.input:
+            # 本地文件处理逻辑
+            print("\n步骤 1：处理本地文件...")
+            input_file_path = args.input
+            display_name = os.path.basename(input_file_path)
+            detected_mime_type = get_mime_type(input_file_path)
+            is_video = detected_mime_type.startswith('video/')
             
-            while retries_counter < max_upload_attempts and not upload_success:
-                try:
-                    if retries_counter > 0:
-                        print(f"尝试重新上传，第 {retries_counter+1} 次尝试...")
-                        time.sleep(2 * retries_counter)  # 指数退避
-                        
-                    _, file_name, mime_type = upload_file_with_http(
-                        api_key=args.api_key, 
-                        file_path=args.audio,
-                        api_base_url=args.api_base_url,
-                        proxy=args.proxy,
-                        disable_proxy=args.no_proxy,
-                        retries=args.retries
-                    )
-                    upload_success = True
-                except requests.exceptions.ProxyError as e:
-                    retries_counter += 1
-                    if retries_counter >= max_upload_attempts:
-                        print(f"\n错误：代理连接问题，已尝试 {max_upload_attempts} 次。您可以尝试：")
-                        print("1. 使用 --no-proxy 参数禁用代理")
-                        print("2. 使用 --proxy 参数指定可用的代理")
-                        raise Exception(f"代理连接失败：{str(e)}")
-                    else:
-                        print(f"\n警告：代理连接问题，将重试... ({retries_counter}/{max_upload_attempts})")
-                except Exception as e:
-                    raise  # 其他错误直接抛出
-                    
-        elif args.file_id or args.file_name:
-            # 路径B：使用远程文件
-            query = args.file_id if args.file_id else args.file_name
-            print(f"\n步骤 1：查找远程文件：{query}")
-            
-            if args.file_id and args.file_id.startswith("files/"):
-                # 如果是完整格式的文件ID，可以直接使用
-                file_name = args.file_id
-                mime_type = args.mime_type or "audio/mp3"  # 使用指定的MIME类型或默认值
-                print(f"使用完整格式的文件ID: {file_name}")
-                print(f"MIME类型: {mime_type}")
-            else:
-                # 需要查询文件列表来获取完整信息
-                file_info = find_file_by_name_or_id(
+            # check-first 逻辑：检查远程是否存在同名文件
+            found_existing = False
+            if args.check_first:
+                print(f"正在检查远程是否已存在文件：{display_name}")
+                existing_file = find_file_by_name(
                     api_key=args.api_key,
-                    name_or_id=query,
+                    display_name=display_name,
                     api_base_url=args.api_base_url,
                     proxy=args.proxy,
                     disable_proxy=args.no_proxy,
                     retries=args.retries
                 )
                 
-                if not file_info:
-                    raise Exception(f"未找到匹配的远程文件：{query}")
+                if existing_file:
+                    remote_name = existing_file.get("displayName")
+                    if remote_name == display_name:
+                        print(f"找到远程同名文件：{remote_name}")
+                        file_name = existing_file.get("name")
+                        mime_type = existing_file.get("mimeType") or detected_mime_type
+                        file_info = existing_file
+                        found_existing = True
+                        
+                        print(f"将使用远程文件代替上传新文件")
+                        print_file_info(file_info, args.detailed_info)
+                    else:
+                        print(f"找到类似文件但非完全匹配：{remote_name}")
+                        print(f"将继续上传新文件")
+                else:
+                    print(f"未找到远程同名文件，将上传新文件")
+            
+            # 如果未找到现有文件，则上传新文件
+            if not found_existing:
+                print(f"\n上传{'视频' if is_video else '音频'}文件：{input_file_path}")
+                retries_counter = 0
+                max_upload_attempts = 3
+                upload_success = False
                 
-                file_name = file_info.get("name")
-                detected_mime_type = file_info.get("mimeType")
+                while retries_counter < max_upload_attempts and not upload_success:
+                    try:
+                        if retries_counter > 0:
+                            print(f"尝试重新上传，第 {retries_counter+1} 次尝试...")
+                            time.sleep(2 * retries_counter)  # 指数退避
+                            
+                        file_info, file_name, mime_type = upload_file_with_http(
+                            api_key=args.api_key, 
+                            file_path=input_file_path,
+                            api_base_url=args.api_base_url,
+                            proxy=args.proxy,
+                            disable_proxy=args.no_proxy,
+                            retries=args.retries
+                        )
+                        
+                        print("\n上传成功，文件信息：")
+                        print_file_info(file_info, args.detailed_info)
+                        
+                        upload_success = True
+                    except requests.exceptions.ProxyError as e:
+                        retries_counter += 1
+                        if retries_counter >= max_upload_attempts:
+                            print(f"\n错误：代理连接问题，已尝试 {max_upload_attempts} 次。您可以尝试：")
+                            print("1. 使用 --no-proxy 参数禁用代理")
+                            print("2. 使用 --proxy 参数指定可用的代理")
+                            raise Exception(f"代理连接失败：{str(e)}")
+                        else:
+                            print(f"\n警告：代理连接问题，将重试... ({retries_counter}/{max_upload_attempts})")
+                    except Exception as e:
+                        raise  # 其他错误直接抛出
+            
+            # 对视频文件，等待处理完成（除非仅上传模式）
+            if not args.upload_only and is_video:
+                wait_for_file_processing(
+                    api_key=args.api_key,
+                    file_name=file_name,
+                    mime_type=mime_type,
+                    api_base_url=args.api_base_url,
+                    proxy=args.proxy,
+                    disable_proxy=args.no_proxy,
+                    retries=args.retries
+                )
                 
-                # 优先使用文件元数据中的MIME类型，然后是用户指定的，最后是默认值
-                mime_type = detected_mime_type or args.mime_type or "audio/mp3"
+                # 处理完成后重新获取文件信息（可能更新了元数据如视频时长）
+                updated_file_info = get_file_info_with_http(
+                    api_key=args.api_key,
+                    file_name=file_name,
+                    api_base_url=args.api_base_url,
+                    proxy=args.proxy,
+                    disable_proxy=args.no_proxy,
+                    retries=args.retries
+                )
                 
-                print(f"找到文件: {file_name}")
-                print(f"显示名称: {file_info.get('displayName', '未知')}")
-                print(f"MIME类型: {mime_type}")
+                if updated_file_info:
+                    file_info = updated_file_info
+                    
+                    print("\n处理后的文件信息：")
+                    print_file_info(file_info, args.detailed_info)
+                    
+        elif args.file_id or args.file_name:
+            # 远程文件处理逻辑
+            query = args.file_id if args.file_id else args.file_name
+            print(f"\n步骤 1：查找远程文件：{query}")
+            
+            # 查找文件并获取完整信息
+            file_info = find_file_by_name_or_id(
+                api_key=args.api_key,
+                name_or_id=query,
+                api_base_url=args.api_base_url,
+                proxy=args.proxy,
+                disable_proxy=args.no_proxy,
+                retries=args.retries
+            )
+            
+            if not file_info:
+                raise Exception(f"未找到匹配的远程文件：{query}")
+            
+            file_name = file_info.get("name")
+            mime_type = file_info.get("mimeType") or args.mime_type or "application/octet-stream"
+            
+            print("\n找到文件信息：")
+            print_file_info(file_info, args.detailed_info)
+            
+            # 检查并等待文件处理状态（视频文件）
+            if not args.upload_only and file_info.get("state") != "ACTIVE" and mime_type.startswith('video/'):
+                wait_for_file_processing(
+                    api_key=args.api_key,
+                    file_name=file_name,
+                    mime_type=mime_type,
+                    api_base_url=args.api_base_url,
+                    proxy=args.proxy,
+                    disable_proxy=args.no_proxy,
+                    retries=args.retries
+                )
+                
+                # 重新获取处理后的文件信息
+                updated_file_info = get_file_info_with_http(
+                    api_key=args.api_key,
+                    file_name=file_name,
+                    api_base_url=args.api_base_url,
+                    proxy=args.proxy,
+                    disable_proxy=args.no_proxy,
+                    retries=args.retries
+                )
+                
+                if updated_file_info:
+                    file_info = updated_file_info
+                    print("\n处理后的文件信息：")
+                    print_file_info(file_info, args.detailed_info)
+        
+        # 如果使用upload-only模式，到这里就结束
+        if args.upload_only:
+            print("\n--- 文件上传完成 ---")
+            print(f"文件ID: {file_name}")
+            print(f"显示名称: {file_info.get('displayName', '未知')}")
+            print(f"MIME类型: {mime_type}")
+            
+            if args.auto_delete:
+                print(f"\n正在删除使用的文件 {file_name}...")
+                delete_success = delete_file_with_http(
+                    api_key=args.api_key,
+                    file_name=file_name,
+                    api_base_url=args.api_base_url,
+                    proxy=args.proxy,
+                    disable_proxy=args.no_proxy,
+                    retries=args.retries
+                )
+                
+                if delete_success:
+                    print("文件已成功删除。")
+                else:
+                    print("警告：文件删除失败。")
+            
+            sys.exit(0)
         
         # 步骤 2：生成内容 (SRT)
         print("\n步骤 2：生成 SRT 内容...")
@@ -929,8 +1372,8 @@ def main():
          print(f"\n代理连接错误：{e}", file=sys.stderr)
          print("\n可能的解决方案：")
          print("1. 检查您的网络连接是否正常")
-         print("2. 使用 --no-proxy 参数禁用系统代理：python gemini-stt.py --audio ... --no-proxy")
-         print("3. 使用 --proxy 参数指定可用的代理：python gemini-stt.py --audio ... --proxy http://proxy.example.com:8080")
+         print("2. 使用 --no-proxy 参数禁用系统代理：python gemini-media-stt.py --input ... --no-proxy")
+         print("3. 使用 --proxy 参数指定可用的代理：python gemini-media-stt.py --input ... --proxy http://proxy.example.com:8080")
          sys.exit(1)
     except requests.exceptions.Timeout as e:
          print(f"\n请求超时错误：{e}", file=sys.stderr)
