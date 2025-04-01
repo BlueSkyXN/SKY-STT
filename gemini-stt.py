@@ -768,9 +768,9 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
     
     # 定义用户提示，根据MIME类型自动调整
     if mime_type.startswith('video/'):
-        user_prompt = "请识别这段视频中的音频内容，并严格按照 SRT 格式生成字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。如果视频中有重要的视觉内容，也可以在字幕中简要描述。"
+        user_prompt = "请识别这段视频中的音频内容，并严格按照 SRT 格式生成字幕，包含序号、时间戳 (HH:MM:SS,mmm --> HH:MM:SS,mmm) 和对应的文本。如果视频中有重要的视觉内容，也可以在字幕中简要描述。你不需要在思考过程中花费过多投入，重点应该是识别-转换和输出标准格式的内容。当然，我需要你给我完整版的转换结果。你需要先识别源音视频的语言，然后使用同样的语言来制作字幕"
     else:
-        user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间码（格式：HH:MM:SS,mmm --> HH:MM:SS,mmm）和对应的文本。"
+        user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间码（格式：HH:MM:SS,mmm --> HH:MM:SS,mmm）和对应的文本。你不需要在思考过程中花费过多投入，重点应该是识别-转换和输出标准格式的内容。当然，我需要你给我完整版的转换结果。你需要先识别源音视频的语言，然后使用同样的语言来制作字幕"
     
     # 使用完整的file_uri如果提供了，否则使用file_name
     uri_to_use = file_uri if file_uri else file_name
