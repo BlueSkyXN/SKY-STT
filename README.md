@@ -42,24 +42,30 @@
 - CUDA 11.0+ (可选，用于 GPU 加速)
 - FFmpeg (用于音频格式转换)
 
-### 快速安装
+### 安装步骤
 
 ```bash
-# 克隆项目
-git clone https://github.com/yourusername/SKY-STT.git
+# 1. 克隆项目
+git clone https://github.com/BlueSkyXN/SKY-STT.git
 cd SKY-STT
 
-# 安装依赖 - 基础版本
+# 2. 完整依赖安装 (推荐)
+# 一键安装所有依赖
+pip install faster-whisper pyannote.audio==3.1.1 soundfile numpy pyyaml torch torchaudio requests urllib3 huggingface_hub ctranslate2 tqdm
+
+# 或分步安装
+# 基础语音转录依赖
 pip install faster-whisper soundfile numpy
 
-# 安装依赖 - 完整版本 (包含说话人分割)
-pip install faster-whisper pyannote.audio==3.1.1 soundfile numpy pyyaml torch torchaudio
+# 说话人分割依赖 
+pip install pyannote.audio==3.1.1 pyyaml torch torchaudio
 
-# Gemini API 支持需要额外依赖
+# Gemini API 依赖
 pip install requests urllib3
 
-# 模型下载和转换工具依赖
+# 模型管理工具依赖
 pip install huggingface_hub ctranslate2 tqdm
+```
 
 # 安装 FFmpeg (推荐)
 # Ubuntu/Debian:
@@ -178,6 +184,59 @@ python gemini-stt.py --input meeting.wav --output meeting.srt \
 | `--language` | `-l` | 语言代码 | zh |
 | `--device` | `-d` | 计算设备 (cuda/cpu/auto) | auto |
 | `--task` | `-t` | 任务类型 (transcribe/translate) | transcribe |
+
+#### 转录参数
+
+| 参数 | 简写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--beam-size` | `-b` | Beam search大小 | 5 |
+| `--no-vad` | | 禁用语音活动检测 | False |
+| `--silence` | `-s` | 最小静音时长(毫秒) | 1000 |
+| `--compute-type` | `-c` | 计算精度 (float16/float32/int8/auto) | auto |
+
+#### 批处理参数
+
+| 参数 | 简写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--batch` | | 启用批处理模式 | False |
+| `--output-dir` | | 批处理模式输出目录 | transcriptions |
+| `--in-memory` | | 在内存中处理而不写入临时文件 | False |
+
+#### 说话人分割参数
+
+| 参数 | 简写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--speakers` | | 启用说话人分割 | False |
+| `--speaker-model` | | 说话人分割模型路径或HF模型ID | 必需(当启用说话人分割时) |
+| `--num-speakers` | | 指定说话人数量（如果已知） | 自动检测 |
+| `--min-speakers` | | 最小说话人数量 | 1 |
+| `--max-speakers` | | 最大说话人数量 | 5 |
+| `--audio-format` | | 音频格式处理 (auto/wav/flac/none) | auto |
+
+#### 环境配置参数
+
+| 参数 | 简写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--cuda-path` | | 自定义CUDA安装路径 | 自动检测 |
+| `--cudnn-path` | | 自定义cuDNN库路径 | 自动检测 |
+| `--ffmpeg-path` | | 自定义FFmpeg可执行文件目录 | 自动检测 |
+
+#### 其他参数
+
+| 参数 | 简写 | 说明 | 默认值 |
+|------|------|------|--------|
+| `--verbose` | `-v` | 启用详细日志输出 | False |
+| `--keep-temp-files` | | 保留临时文件（不自动删除） | False |
+
+#### 使用说明
+
+- `audio-format` 参数详解：
+  - `auto`: 自动检测音频格式，仅在需要时转换（推荐）
+  - `wav`: 强制转换为WAV格式
+  - `flac`: 强制转换为FLAC格式  
+  - `none`: 不进行任何格式转换
+- 说话人分割功能需要提供 `--speaker-model` 参数
+- 使用 `--verbose` 可获得详细的处理日志，便于调试
 
 #### 高级参数
 
@@ -328,6 +387,8 @@ python tools/convert_whisper.py \
 - `--model_id`: Hugging Face 模型 ID
 - `--output_dir`: 转换后模型保存路径
 - `--compute_type`: 计算精度 (float16/float32/int8)
+- `--download_dir`: 下载缓存目录（可选）
+- `--force_download`: 强制重新下载模型
 - `--force`: 强制覆盖已存在的输出目录
 - `--clean_download`: 转换完成后删除原始下载文件
 - `--skip_validation`: 跳过模型验证步骤
@@ -351,6 +412,9 @@ python tools/get_Pyannote_model.py --check-versions
 
 # 检查 pyannote.audio 安装状态
 python tools/get_Pyannote_model.py --check-pyannote
+
+# 使用自定义 Token
+python tools/get_Pyannote_model.py --output ./pyannote-models --token YOUR_HF_TOKEN
 ```
 
 **功能特点**:
@@ -359,6 +423,16 @@ python tools/get_Pyannote_model.py --check-pyannote
 - 自动配置模型路径关系
 - 生成兼容的 config.yaml 文件
 - 验证模型完整性
+- 检查模型版本和安装状态
+
+**参数说明**:
+- `--output`: 输出根目录，默认为 ./pyannote-models
+- `--no-auth`: 不使用身份验证（仅用于公开模型）
+- `--force`: 强制重新下载，即使目标目录已存在文件
+- `--restructure`: 重新创建config.yaml文件，覆盖现有文件
+- `--check-versions`: 仅检查可用的模型版本，不执行下载
+- `--check-pyannote`: 仅检查pyannote.audio安装状态
+- `--token`: Hugging Face API令牌，也可通过HF_TOKEN环境变量设置
 
 ## ⚡ 性能优化
 
