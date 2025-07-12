@@ -20,7 +20,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Union, Generator, Tuple, Iterator, Set
 import io
-import numpy as np
 
 # 日志配置
 logging.basicConfig(
@@ -1829,55 +1828,75 @@ def main():
     """主函数"""
     start_time = time.time()
     
-    # 解析命令行参数
-    args = parse_arguments()
-    
-    # 显示环境信息
-    logger.info(f"Python 版本: {sys.version}")
-    logger.info(f"系统平台: {sys.platform}")
-    
-    # 显示主要组件路径
-    if CUDA_PATH:
-        logger.info(f"CUDA 路径: {CUDA_PATH}")
-    if CUDNN_PATH:
-        logger.info(f"cuDNN 路径: {CUDNN_PATH}")
-    if FFMPEG_PATH:
-        logger.info(f"FFmpeg 路径: {FFMPEG_PATH}")
-    
-    # 检查FFmpeg是否可用
-    ffmpeg_available = AudioProcessor.check_ffmpeg_available()
-    if ffmpeg_available:
-        logger.info("FFmpeg 可用: 将使用FFmpeg进行音频格式转换")
-    else:
-        logger.info("FFmpeg 不可用: 将使用soundfile进行音频格式转换")
-    
-    # 判断处理模式
-    success = False
-    if args.batch:
-        success = process_batch(args)
-    else:
-        success = process_single_file(args)
-    
-    # 清理临时文件
-    if not args.keep_temp_files:
-        AudioProcessor.cleanup_temp_files()
-    else:
-        logger.info(f"已保留临时文件，共 {len(TEMP_FILES)} 个文件未删除")
-    
-    # 执行统计
-    total_time = time.time() - start_time
-    logger.info(f"程序运行总耗时: {total_time:.2f}s")
-    
-    # 获取GPU状态
-    gpu_info = GPUInfo.check_cuda_available()
-    if gpu_info["cuda_available"]:
-        # 显示GPU内存使用情况
-        memory_usage = GPUInfo.get_gpu_memory_usage()
-        for gpu_id, info in memory_usage.items():
-            logger.info(f"GPU {gpu_id} 内存占用: {info['used_GB']}/{info['total_GB']}GB "
-                       f"({info['usage_percent']}%)")
-    
-    return 0 if success else 1
+    try:
+        # 解析命令行参数
+        args = parse_arguments()
+        
+        # 显示环境信息
+        logger.info(f"Python 版本: {sys.version}")
+        logger.info(f"系统平台: {sys.platform}")
+        
+        # 显示主要组件路径
+        if CUDA_PATH:
+            logger.info(f"CUDA 路径: {CUDA_PATH}")
+        if CUDNN_PATH:
+            logger.info(f"cuDNN 路径: {CUDNN_PATH}")
+        if FFMPEG_PATH:
+            logger.info(f"FFmpeg 路径: {FFMPEG_PATH}")
+        
+        # 检查FFmpeg是否可用
+        ffmpeg_available = AudioProcessor.check_ffmpeg_available()
+        if ffmpeg_available:
+            logger.info("FFmpeg 可用: 将使用FFmpeg进行音频格式转换")
+        else:
+            logger.info("FFmpeg 不可用: 将使用soundfile进行音频格式转换")
+        
+        # 判断处理模式
+        success = False
+        if args.batch:
+            success = process_batch(args)
+        else:
+            success = process_single_file(args)
+        
+        # 清理临时文件
+        if not args.keep_temp_files:
+            AudioProcessor.cleanup_temp_files()
+        else:
+            logger.info(f"已保留临时文件，共 {len(TEMP_FILES)} 个文件未删除")
+        
+        # 执行统计
+        total_time = time.time() - start_time
+        logger.info(f"程序运行总耗时: {total_time:.2f}s")
+        
+        # 获取GPU状态
+        gpu_info = GPUInfo.check_cuda_available()
+        if gpu_info["cuda_available"]:
+            # 显示GPU内存使用情况
+            memory_usage = GPUInfo.get_gpu_memory_usage()
+            for gpu_id, info in memory_usage.items():
+                logger.info(f"GPU {gpu_id} 内存占用: {info['used_GB']}/{info['total_GB']}GB "
+                           f"({info['usage_percent']}%)")
+        
+        return 0 if success else 1
+        
+    except KeyboardInterrupt:
+        logger.warning("程序被用户中断")
+        return 130  # Standard exit code for Ctrl+C
+    except SystemExit:
+        # Re-raise SystemExit to allow normal argument parsing errors
+        raise
+    except Exception as e:
+        logger.error(f"程序执行过程中发生错误: {e}")
+        logger.debug("详细错误信息:", exc_info=True)
+        return 1
+    finally:
+        # 确保在任何情况下都清理临时文件（如果程序异常退出）
+        try:
+            if not hasattr(main, '_cleanup_done'):
+                AudioProcessor.cleanup_temp_files()
+                main._cleanup_done = True
+        except Exception as e:
+            logger.debug(f"清理临时文件时出错: {e}")
 
 
 if __name__ == "__main__":
