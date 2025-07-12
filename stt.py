@@ -71,133 +71,141 @@ def timer(func):
         return result
     return wrapper
 
-class GPUInfo:
-    """GPU信息检测与管理类"""
+class SafeGPUDetector:
+    """安全GPU检测器 - 防崩溃设计"""
     
     @staticmethod
     def check_cuda_available() -> Dict[str, Any]:
-        """增强的CUDA可用性检测"""
+        """分层安全GPU检测 - 永不崩溃"""
+        
         status = {
             "cuda_available": False,
-            "device": "cpu",
+            "device": "cpu", 
             "compute_type": "float32",
             "gpu_info": None,
-            "detection_method": None
+            "detection_method": "安全检测",
+            "error_details": [],
+            "fallback_reason": None
         }
         
-        # 方法1：使用PyTorch检测
+        # 🛡️ 第一层：PyTorch导入和基础检查
         try:
             import torch
-            torch_cuda_available = torch.cuda.is_available()
+            if not torch.cuda.is_available():
+                status["fallback_reason"] = "CUDA编译支持不可用"
+                logger.info("GPU检测: CUDA编译支持不可用，使用CPU模式")
+                return status
+        except Exception as e:
+            status["error_details"].append(f"PyTorch导入失败: {e}")
+            status["fallback_reason"] = "PyTorch环境问题"
+            logger.warning(f"GPU检测: PyTorch导入失败，使用CPU模式: {e}")
+            return status
+        
+        # 🛡️ 第二层：设备计数安全检查
+        try:
+            device_count = torch.cuda.device_count()
+            if device_count == 0:
+                status["fallback_reason"] = "未检测到CUDA设备"
+                logger.info("GPU检测: 未检测到CUDA设备，使用CPU模式")
+                return status
+        except Exception as e:
+            status["error_details"].append(f"设备计数失败: {e}")
+            status["fallback_reason"] = "GPU枚举失败"
+            logger.warning(f"GPU检测: 设备枚举失败，使用CPU模式: {e}")
+            return status
+        
+        # 🛡️ 第三层：设备访问安全测试
+        try:
+            # 安全的当前设备检查
+            current_device = torch.cuda.current_device()
+            device_name = torch.cuda.get_device_name(current_device)
             
-            if torch_cuda_available:
-                status["cuda_available"] = True
-                status["device"] = "cuda"
-                status["compute_type"] = "float16"
-                status["detection_method"] = "PyTorch"
-                
-                # 获取当前设备信息
-                current_device = torch.cuda.current_device()
-                props = torch.cuda.get_device_properties(current_device)
-                
-                # 记录GPU详细信息
-                status["gpu_info"] = {
-                    "name": props.name,
+        except RuntimeError as e:
+            status["error_details"].append(f"设备访问失败: {e}")
+            status["fallback_reason"] = "GPU设备不可访问"
+            logger.warning(f"GPU检测: 设备访问失败，使用CPU模式: {e}")
+            return status
+        except Exception as e:
+            status["error_details"].append(f"设备信息获取失败: {e}")
+            status["fallback_reason"] = "GPU状态异常"
+            logger.warning(f"GPU检测: 设备状态异常，使用CPU模式: {e}")
+            return status
+        
+        # 🛡️ 第四层：内存和能力安全测试
+        try:
+            # 测试基本GPU操作
+            test_tensor = torch.randn(10, 10, device='cuda')
+            _ = test_tensor + 1  # 基本运算测试
+            del test_tensor
+            torch.cuda.empty_cache()
+            
+            # 获取设备详细信息
+            props = torch.cuda.get_device_properties(current_device)
+            capability = torch.cuda.get_device_capability(current_device)
+            
+            # ✅ 成功检测，设置GPU状态
+            status.update({
+                "cuda_available": True,
+                "device": "cuda",
+                "compute_type": "float16" if capability[0] >= 7 else "int8",
+                "gpu_info": {
+                    "name": device_name,
                     "total_memory_GB": round(props.total_memory / (1024**3), 2),
                     "cuda_version": torch.version.cuda,
                     "device_id": current_device,
+                    "capability": f"{capability[0]}.{capability[1]}",
                     "multi_processor_count": props.multi_processor_count
                 }
-                
-                # 选择最优的compute_type
-                # 较新的GPU支持更高效的半精度计算
-                if torch.cuda.get_device_capability(current_device)[0] >= 7:
-                    status["compute_type"] = "float16"
-                else:
-                    status["compute_type"] = "int8"
-                
-                logger.info(f"CUDA检测(PyTorch): 可用, GPU: {props.name}, "
-                           f"内存: {status['gpu_info']['total_memory_GB']}GB, "
-                           f"计算类型: {status['compute_type']}")
-            else:
-                logger.debug("CUDA检测(PyTorch): 不可用")
+            })
+            
+            logger.info(f"GPU检测成功: {device_name}, "
+                       f"内存: {status['gpu_info']['total_memory_GB']}GB, "
+                       f"计算类型: {status['compute_type']}")
+            
+        except torch.cuda.OutOfMemoryError as e:
+            status["error_details"].append("GPU内存不足")
+            status["fallback_reason"] = "GPU内存耗尽"
+            logger.warning(f"GPU检测: 内存不足，使用CPU模式: {e}")
         except Exception as e:
-            logger.debug(f"PyTorch CUDA检测出错: {e}")
-        
-        # 方法2：检查CUDA环境变量和系统路径
-        if not status["cuda_available"]:
-            try:
-                # 检查CUDA环境变量
-                cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
-                if cuda_home and os.path.exists(cuda_home):
-                    status["cuda_available"] = True
-                    status["device"] = "cuda"
-                    status["detection_method"] = "环境变量"
-                    logger.info(f"CUDA检测(环境变量): 可用, CUDA_HOME={cuda_home}")
-                
-                # 检查系统路径中的CUDA
-                if os.name == "nt":  # Windows
-                    cuda_paths = [
-                        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA",
-                        r"C:\Program Files\NVIDIA Corporation\CUDA"
-                    ]
-                    for base_path in cuda_paths:
-                        if os.path.exists(base_path):
-                            for version_dir in os.listdir(base_path):
-                                if version_dir.startswith("v"):
-                                    status["cuda_available"] = True
-                                    status["device"] = "cuda"
-                                    status["detection_method"] = "系统路径"
-                                    logger.info(f"CUDA检测(系统路径): 可用, 路径={os.path.join(base_path, version_dir)}")
-                                    break
-                else:  # Linux/Mac
-                    if any(os.path.exists(f"/usr/local/cuda-{i}") for i in range(9, 13)):
-                        status["cuda_available"] = True
-                        status["device"] = "cuda"
-                        status["detection_method"] = "系统路径"
-                        logger.info("CUDA检测(系统路径): 可用, 路径=/usr/local/cuda-*")
-            except Exception as e:
-                logger.debug(f"环境CUDA检测出错: {e}")
-        
-        # 方法3：检查设备文件 (仅Linux)
-        if not status["cuda_available"] and os.name != "nt":
-            try:
-                if os.path.exists("/dev/nvidia0"):
-                    status["cuda_available"] = True
-                    status["device"] = "cuda"
-                    status["detection_method"] = "设备文件"
-                    logger.info("CUDA检测(设备文件): 可用, /dev/nvidia0存在")
-            except Exception as e:
-                logger.debug(f"设备文件CUDA检测出错: {e}")
-        
-        # 总结检测结果
-        if not status["cuda_available"]:
-            logger.info("CUDA检测结果: 所有检测方法均未发现可用CUDA，将使用CPU模式")
+            status["error_details"].append(f"GPU功能测试失败: {e}")
+            status["fallback_reason"] = "GPU功能异常"
+            logger.warning(f"GPU检测: 功能测试失败，使用CPU模式: {e}")
         
         return status
     
     @staticmethod
-    def get_gpu_memory_usage() -> Dict[int, Dict[str, float]]:
-        """获取当前GPU内存使用率"""
+    def get_safe_gpu_memory_usage() -> Dict[int, Dict[str, float]]:
+        """安全的GPU内存使用率检查"""
         try:
             import torch
-            gpu_memory_usage = {}
-            
-            for i in range(torch.cuda.device_count()):
-                reserved = torch.cuda.memory_reserved(i) / 1024**3
-                allocated = torch.cuda.memory_allocated(i) / 1024**3
-                free = torch.cuda.get_device_properties(i).total_memory / 1024**3 - allocated
+            if not torch.cuda.is_available():
+                return {}
                 
-                gpu_memory_usage[i] = {
-                    "total_GB": round(torch.cuda.get_device_properties(i).total_memory / 1024**3, 2),
-                    "used_GB": round(allocated, 2),
-                    "free_GB": round(free, 2),
-                    "usage_percent": round(allocated / (torch.cuda.get_device_properties(i).total_memory / 1024**3) * 100, 2)
-                }
+            gpu_memory_usage = {}
+            device_count = torch.cuda.device_count()
             
+            for i in range(device_count):
+                try:
+                    total_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                    allocated = torch.cuda.memory_allocated(i) / 1024**3
+                    reserved = torch.cuda.memory_reserved(i) / 1024**3
+                    
+                    gpu_memory_usage[i] = {
+                        "total_GB": round(total_memory, 2),
+                        "used_GB": round(allocated, 2), 
+                        "reserved_GB": round(reserved, 2),
+                        "free_GB": round(total_memory - allocated, 2),
+                        "usage_percent": round(allocated / total_memory * 100, 2)
+                    }
+                except Exception as e:
+                    # 单个GPU检查失败不影响其他GPU
+                    logger.debug(f"GPU {i} 内存检查失败: {e}")
+                    continue
+                    
             return gpu_memory_usage
+            
         except Exception as e:
-            logger.debug(f"获取GPU内存使用率失败: {e}")
+            logger.debug(f"GPU内存使用率检查失败: {e}")
             return {}
 
 
@@ -213,7 +221,7 @@ class SpeakerDiarization:
             model_path: 本地模型路径或HuggingFace模型ID
         """
         # 检测CUDA可用性
-        gpu_status = GPUInfo.check_cuda_available()
+        gpu_status = SafeGPUDetector.check_cuda_available()
         self.device = device
         if device == "auto":
             self.device = gpu_status["device"]
@@ -1145,13 +1153,17 @@ class WhisperTranscriber:
             self.compute_type = compute_type if compute_type != "auto" else "float32"
         else:  # auto模式
             # 获取自动检测结果
-            gpu_status = GPUInfo.check_cuda_available()
+            gpu_status = SafeGPUDetector.check_cuda_available()
             self.device = gpu_status["device"]
             
             if compute_type != "auto":
                 self.compute_type = compute_type
             else:
                 self.compute_type = gpu_status["compute_type"]
+            
+            # 显示详细的检测结果
+            if gpu_status["fallback_reason"]:
+                logger.info(f"GPU检测回退到CPU: {gpu_status['fallback_reason']}")
             
             logger.info(f"自动选择设备: {self.device}, 计算类型: {self.compute_type}")
         
@@ -1869,10 +1881,10 @@ def main():
     logger.info(f"程序运行总耗时: {total_time:.2f}s")
     
     # 获取GPU状态
-    gpu_info = GPUInfo.check_cuda_available()
+    gpu_info = SafeGPUDetector.check_cuda_available()
     if gpu_info["cuda_available"]:
         # 显示GPU内存使用情况
-        memory_usage = GPUInfo.get_gpu_memory_usage()
+        memory_usage = SafeGPUDetector.get_safe_gpu_memory_usage()
         for gpu_id, info in memory_usage.items():
             logger.info(f"GPU {gpu_id} 内存占用: {info['used_GB']}/{info['total_GB']}GB "
                        f"({info['usage_percent']}%)")

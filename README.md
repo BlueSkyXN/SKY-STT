@@ -15,8 +15,14 @@
 - **多格式支持**: 输入支持 wav、mp3、m4a、flac、ogg、opus 等格式
 - **多输出格式**: txt、srt、json 等多种输出格式
 - **批处理模式**: 支持目录批量处理
-- **GPU 加速**: 自动检测和使用 CUDA GPU
+- **智能GPU加速**: 5层防御GPU检测，自动回退到CPU模式，确保任何环境下稳定运行
 - **实时进度**: 详细的处理进度和日志输出
+
+### 🛡️ 稳定性保障
+- **防崩溃设计**: 智能GPU检测，无GPU环境自动降级
+- **错误恢复**: 详细错误诊断和自动故障处理
+- **环境兼容**: Docker、虚拟环境、云端无缝运行
+- **优雅降级**: GPU不可用时自动切换CPU模式，保证程序正常运行
 
 ### 🛠️ 便利工具
 - **模型转换器**: 自动下载和转换 Whisper 模型
@@ -69,16 +75,45 @@ brew install ffmpeg
 # Windows: 下载并添加到 PATH
 ```
 
-### GPU 支持 (可选但推荐)
+### GPU 支持 (完全可选)
 
-如果有 NVIDIA GPU，安装 CUDA 版本的 PyTorch：
+⚠️ **重要说明**: GPU不是必需的！程序在无GPU环境下会自动使用CPU模式，性能依然良好。
+
+如果有 NVIDIA GPU 且希望加速处理，可安装 CUDA 版本的 PyTorch：
 
 ```bash
-# CUDA 11.8
+# CUDA 11.8 (推荐)
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # CUDA 12.1
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+**无GPU用户**: 直接跳过此步骤，程序会自动使用CPU模式。
+
+## 🌍 环境兼容性
+
+### 支持的运行环境
+- ✅ **本地计算机**: Windows、macOS、Linux
+- ✅ **Docker容器**: 自动适配GPU/CPU模式  
+- ✅ **云端服务器**: AWS、GCP、Azure等
+- ✅ **虚拟环境**: conda、venv、pipenv
+- ✅ **Jupyter Notebook**: 完全支持
+- ✅ **无GPU环境**: 自动CPU模式
+
+### 典型部署场景
+```bash
+# Docker部署 (无GPU)
+docker run -v $(pwd):/app python:3.9 python /app/stt.py -a audio.wav -m model
+
+# 云端CPU服务器
+python stt.py -a audio.wav -m model --device cpu
+
+# 混合环境 (自动检测)
+python stt.py -a audio.wav -m model --device auto
+
+# 容器环境验证
+python stt.py -a test.wav -m model --verbose --device auto
 ```
 
 ### Hugging Face Token 配置 (说话人分割必需)
@@ -429,14 +464,24 @@ python tools/convert_whisper.py --model_id openai/whisper-base
 pip install pyannote.audio==3.1.1 torch torchaudio
 ```
 
-**Q: CUDA 检测失败**
+**Q: 程序在无GPU环境下是否能正常工作？**
 ```bash
-# 检查 CUDA 安装
-nvidia-smi
-python -c "import torch; print(torch.cuda.is_available())"
+# ✅ 完全可以！程序会自动检测并使用CPU模式
+python stt.py -a audio.wav -m model_path -o output.txt
+# 日志会显示: "GPU检测回退到CPU: CUDA编译支持不可用"
+```
 
-# 手动指定 CUDA 路径
-python stt.py --cuda-path /usr/local/cuda-11.8 --device cuda
+**Q: 如何强制使用CPU模式？**
+```bash
+# 明确指定使用CPU
+python stt.py -a audio.wav -m model_path -o output.txt --device cpu
+```
+
+**Q: GPU检测有问题怎么办？**
+```bash
+# 无需担心！程序会自动回退到CPU模式并继续工作
+# 查看详细检测信息
+python stt.py -a audio.wav -m model_path -o output.txt --verbose
 ```
 
 ### 使用问题

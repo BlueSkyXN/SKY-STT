@@ -9,6 +9,9 @@ import sys
 import requests
 import json
 import time
+import re
+import urllib.parse
+from typing import Optional, Dict, Any, List, Tuple
 from urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 
@@ -149,7 +152,6 @@ def normalize_file_id(file_id):
     
     # 如果是完整的URI，则提取最后一部分作为文件ID
     if file_id.startswith("http"):
-        import re
         match = re.search(r'/files/([^/]+)(?:/|$)', file_id)
         if match:
             return f"files/{match.group(1)}"
@@ -160,6 +162,198 @@ def normalize_file_id(file_id):
     
     # 否则，添加 "files/" 前缀
     return f"files/{file_id}"
+
+class FileURIBuilder:
+    """智能文件URI构建器 - 处理所有URI相关问题的核心类"""
+    
+    def __init__(self, api_base_url: Optional[str] = None, debug: bool = False):
+        """
+        初始化URI构建器
+        
+        Args:
+            api_base_url: 自定义API基础URL
+            debug: 是否启用详细调试日志
+        """
+        self.custom_api_base = api_base_url.rstrip('/') if api_base_url else None
+        self.default_api_base = "https://generativelanguage.googleapis.com"
+        self.debug = debug
+        self.build_log = []  # 构建过程日志
+        
+    def build_and_validate_uri(self, file_info: Dict[str, Any]) -> Tuple[str, List[str]]:
+        """
+        构建并验证文件URI - 主入口函数
+        
+        Args:
+            file_info: 文件信息字典
+            
+        Returns:
+            Tuple[str, List[str]]: (最终URI, 构建过程日志)
+            
+        Raises:
+            ValueError: 当无法构建有效URI时
+        """
+        self.build_log = []
+        
+        # 多层级fallback策略
+        strategies = [
+            self._strategy_use_api_uri,
+            self._strategy_fix_domain_mismatch, 
+            self._strategy_build_from_name,
+            self._strategy_try_variants
+        ]
+        
+        for i, strategy in enumerate(strategies, 1):
+            try:
+                uri = strategy(file_info)
+                if uri and self._validate_uri_format(uri):
+                    self._log(f"✅ 策略{i}成功: {strategy.__name__}")
+                    self._log(f"最终URI: {uri}")
+                    return uri, self.build_log.copy()
+                    
+            except Exception as e:
+                self._log(f"❌ 策略{i}失败: {strategy.__name__} - {str(e)}")
+                continue
+                
+        # 所有策略都失败
+        raise ValueError(f"无法构建有效的文件URI。构建日志:\n" + "\n".join(self.build_log))
+    
+    def _strategy_use_api_uri(self, file_info: Dict[str, Any]) -> Optional[str]:
+        """策略1: 直接使用API返回的uri字段"""
+        api_uri = file_info.get("uri")
+        
+        if not api_uri:
+            self._log("策略1: API响应中无uri字段")
+            return None
+            
+        if not isinstance(api_uri, str) or not api_uri.strip():
+            self._log("策略1: uri字段为空或非字符串")
+            return None
+            
+        # 验证URI是否与当前API基础URL兼容
+        if self.custom_api_base:
+            parsed = urllib.parse.urlparse(api_uri)
+            custom_parsed = urllib.parse.urlparse(self.custom_api_base)
+            
+            if parsed.netloc != custom_parsed.netloc:
+                self._log(f"策略1: URI域名({parsed.netloc})与自定义API基础URL({custom_parsed.netloc})不匹配")
+                return None
+                
+        self._log(f"策略1: 使用API返回的URI: {api_uri}")
+        return api_uri.strip()
+    
+    def _strategy_fix_domain_mismatch(self, file_info: Dict[str, Any]) -> Optional[str]:
+        """策略2: 修正域名不匹配问题"""
+        if not self.custom_api_base:
+            return None
+            
+        api_uri = file_info.get("uri")
+        if not api_uri:
+            return None
+            
+        # 提取路径部分，替换域名
+        parsed = urllib.parse.urlparse(api_uri)
+        if not parsed.path:
+            return None
+            
+        # 构建新URI：自定义域名 + 原路径
+        new_uri = f"{self.custom_api_base}{parsed.path}"
+        self._log(f"策略2: 修正域名不匹配 {api_uri} -> {new_uri}")
+        return new_uri
+    
+    def _strategy_build_from_name(self, file_info: Dict[str, Any]) -> Optional[str]:
+        """策略3: 从file_name构建完整URI"""
+        file_name = file_info.get("name")
+        if not file_name:
+            self._log("策略3: 文件信息中缺少name字段")
+            return None
+            
+        # 确保file_name格式正确
+        if not file_name.startswith("files/"):
+            file_name = f"files/{file_name}"
+            
+        # 使用适当的API基础URL
+        base_url = self.custom_api_base or self.default_api_base
+        uri = f"{base_url}/v1beta/{file_name}"
+        
+        self._log(f"策略3: 从文件名构建URI: {file_name} -> {uri}")
+        return uri
+    
+    def _strategy_try_variants(self, file_info: Dict[str, Any]) -> Optional[str]:
+        """策略4: 尝试不同的URI格式变体"""
+        file_name = file_info.get("name", "")
+        
+        # 提取文件ID
+        file_id = self._extract_file_id(file_name)
+        if not file_id:
+            self._log("策略4: 无法提取有效的文件ID")
+            return None
+            
+        base_url = self.custom_api_base or self.default_api_base
+        
+        # 尝试不同的路径格式
+        variants = [
+            f"{base_url}/v1beta/files/{file_id}",
+            f"{base_url}/v1/files/{file_id}",
+            f"{base_url}/files/{file_id}",
+        ]
+        
+        for variant in variants:
+            self._log(f"策略4: 尝试变体: {variant}")
+            if self._validate_uri_format(variant):
+                return variant
+                
+        return None
+    
+    def _validate_uri_format(self, uri: str) -> bool:
+        """验证URI格式是否符合预期"""
+        if not uri:
+            return False
+            
+        # 基础URL格式验证
+        try:
+            parsed = urllib.parse.urlparse(uri)
+            if not all([parsed.scheme, parsed.netloc]):
+                self._log(f"URI格式验证失败: 缺少scheme或netloc - {uri}")
+                return False
+                
+            if parsed.scheme not in ['http', 'https']:
+                self._log(f"URI格式验证失败: 不支持的scheme({parsed.scheme}) - {uri}")
+                return False
+                
+        except Exception as e:
+            self._log(f"URI格式验证失败: 解析错误 - {str(e)}")
+            return False
+            
+        # 路径结构验证
+        if not re.search(r'/v1(?:beta)?/files/[a-zA-Z0-9_-]+(?:/|$)', uri):
+            self._log(f"URI格式验证失败: 路径结构不正确 - {uri}")
+            return False
+            
+        self._log(f"URI格式验证通过: {uri}")
+        return True
+    
+    def _extract_file_id(self, file_name: str) -> Optional[str]:
+        """从文件名中提取文件ID"""
+        if not file_name:
+            return None
+            
+        # 处理 "files/abc123" 格式
+        if file_name.startswith("files/"):
+            file_id = file_name[6:]  # 移除 "files/" 前缀
+            if file_id and re.match(r'^[a-zA-Z0-9_-]+$', file_id):
+                return file_id
+                
+        # 处理直接的文件ID
+        if re.match(r'^[a-zA-Z0-9_-]+$', file_name):
+            return file_name
+            
+        return None
+    
+    def _log(self, message: str):
+        """记录构建过程日志"""
+        self.build_log.append(message)
+        if self.debug:
+            print(f"[FileURIBuilder] {message}")
 
 def print_file_info(file_info, detailed=False):
     """
@@ -741,7 +935,7 @@ def delete_all_files_with_http(api_key, api_base_url=None, proxy=None, disable_p
     print(f"清理完成: 成功删除 {success_count} 个文件，失败 {failure_count} 个文件。")
     return success_count, failure_count
 
-def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_prompt=None, api_base_url=None, proxy=None, disable_proxy=False, retries=3, temperature=0.2, max_output_tokens=None, safety_settings=None, file_uri=None):
+def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_prompt=None, api_base_url=None, proxy=None, disable_proxy=False, retries=3, temperature=0.2, max_output_tokens=None, safety_settings=None, file_uri=None, file_info=None):
     """
     使用HTTP请求调用Gemini API生成SRT转录文本
     
@@ -758,7 +952,8 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
         temperature (float): 生成温度，控制随机性 (0.0-1.0)
         max_output_tokens (int, optional): 最大输出标记数
         safety_settings (list, optional): 安全设置列表
-        file_uri (str, optional): 完整的文件URI，优先于file_name使用
+        file_uri (str, optional): 完整的文件URI，优先于file_name使用（向后兼容）
+        file_info (dict, optional): 完整的文件信息字典，包含uri和name字段（推荐使用）
         
     返回:
         str: 生成的SRT内容
@@ -772,8 +967,52 @@ def generate_srt_with_http(api_key, model_name, file_name, mime_type, system_pro
     else:
         user_prompt = "请识别这段音频的源语言，并严格按照 SRT 格式生成该源语言的字幕，包含序号、时间码（格式：HH:MM:SS,mmm --> HH:MM:SS,mmm）和对应的文本。你不需要在思考过程中花费过多投入，重点应该是识别-转换和输出标准格式的内容。当然，我需要你给我完整版的转换结果。你需要先识别源音视频的语言，然后使用同样的语言来制作字幕"
     
-    # 使用完整的file_uri如果提供了，否则使用file_name
-    uri_to_use = file_uri if file_uri else file_name
+    # ✅ 智能URI处理逻辑
+    try:
+        # 优先级: file_uri > file_info > file_name fallback
+        if file_uri:
+            # 保持完全向后兼容：如果用户直接传递file_uri，直接使用
+            final_uri = file_uri
+            print("使用直接传递的file_uri（向后兼容模式）")
+            
+        elif file_info:
+            # 新功能：使用智能URI构建器
+            uri_builder = FileURIBuilder(api_base_url=api_base_url)
+            final_uri, build_log = uri_builder.build_and_validate_uri(file_info)
+            print(f"✅ 智能URI构建成功: {final_uri}")
+            
+        else:
+            # 最终fallback：使用原有逻辑（但改进）
+            uri_builder = FileURIBuilder(api_base_url=api_base_url)
+            fallback_info = {"name": file_name}
+            final_uri, build_log = uri_builder.build_and_validate_uri(fallback_info)
+            print(f"⚠️  Fallback模式构建URI: {final_uri}")
+            
+    except Exception as e:
+        # 如果智能构建失败，尝试原有逻辑作为最后手段
+        print(f"⚠️  智能URI构建失败，使用原有逻辑: {str(e)}")
+        final_uri = file_uri if file_uri else file_name
+        
+        # 但至少做基础验证
+        if not final_uri or not str(final_uri).strip():
+            error_msg = f"""
+❌ 文件URI构建失败: {str(e)}
+
+🔍 可能的解决方案:
+1. 检查文件是否已正确上传到Gemini API
+2. 验证文件ID格式是否正确
+3. 如果使用自定义API基础URL，确保域名配置正确
+4. 尝试重新上传文件
+
+📋 技术详情:
+- 文件名: {file_name}
+- API基础URL: {api_base_url or '默认'}
+- 文件信息: {file_info}
+"""
+            raise Exception(error_msg)
+    
+    # 使用构建好的URI
+    uri_to_use = final_uri
     
     # 构建请求体 - 使用下划线命名法，并使用完整的URI
     request_body = {
@@ -1272,7 +1511,7 @@ def main():
                 else:
                     print("安全过滤已禁用。")
                 
-                # *** 关键修改: 使用完整URI而不是文件ID ***
+                # ✅ 关键修改: 使用智能URI构建器和完整file_info
                 srt_content = generate_srt_with_http(
                     api_key=args.api_key,
                     model_name=args.model,
@@ -1286,7 +1525,7 @@ def main():
                     temperature=args.temperature,
                     max_output_tokens=args.max_output_tokens,
                     safety_settings=safety_settings,
-                    file_uri=file_info.get("uri")  # 关键修改：传递完整URI
+                    file_info=file_info  # ✅ 新增：传递完整文件信息（推荐）
                 )
                 generate_success = True
             except requests.exceptions.ProxyError as e:
