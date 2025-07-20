@@ -50,11 +50,9 @@ jobs:
           python -m pip install pyinstaller requests urllib3
 
       - name: Build gemini-stt
+        shell: bash
         run: |
-          pyinstaller --onefile \
-            --hidden-import=requests,urllib3,json,argparse,mimetypes,datetime,sys,os,time,re \
-            --strip gemini-stt.py \
-            --distpath dist/${{ matrix.platform }}
+          pyinstaller --onefile --hidden-import=requests,urllib3,json,argparse,mimetypes,datetime,sys,os,time,re --strip gemini-stt.py --distpath dist/${{ matrix.platform }}
 
       - name: Upload gemini-stt
         uses: actions/upload-artifact@v4
@@ -104,11 +102,9 @@ jobs:
           python -m pip install pyinstaller huggingface_hub tqdm
 
       - name: Build convert_whisper
+        shell: bash
         run: |
-          pyinstaller --onefile \
-            --hidden-import=huggingface_hub,tqdm,shutil,pathlib,argparse,os \
-            --strip tools/convert_whisper.py \
-            --distpath dist/${{ matrix.platform }}
+          pyinstaller --onefile --hidden-import=huggingface_hub,tqdm,shutil,pathlib,argparse,os --strip tools/convert_whisper.py --distpath dist/${{ matrix.platform }}
 
       - name: Upload convert_whisper
         uses: actions/upload-artifact@v4
@@ -158,11 +154,9 @@ jobs:
           python -m pip install pyinstaller huggingface_hub pyyaml
 
       - name: Build get_Pyannote_model
+        shell: bash
         run: |
-          pyinstaller --onefile \
-            --hidden-import=huggingface_hub,yaml,shutil,subprocess,pathlib,argparse,os,sys \
-            --strip tools/get_Pyannote_model.py \
-            --distpath dist/${{ matrix.platform }}
+          pyinstaller --onefile --hidden-import=huggingface_hub,yaml,shutil,subprocess,pathlib,argparse,os,sys --strip tools/get_Pyannote_model.py --distpath dist/${{ matrix.platform }}
 
       - name: Upload get_Pyannote_model
         uses: actions/upload-artifact@v4
@@ -249,6 +243,7 @@ jobs:
           brew install portaudio
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller numpy soundfile faster-whisper pyyaml
@@ -268,12 +263,10 @@ jobs:
           python -m pip install pyannote.audio==3.1.1 || echo "Warning: pyannote.audio installation failed, continuing..."
 
       - name: Build STT
+        shell: bash
         run: |
           echo "Building STT for ${{ matrix.platform }} with ${{ matrix.torch_variant }} support"
-          pyinstaller --onefile \
-            --hidden-import=faster_whisper,soundfile,numpy,ctranslate2,pyannote.audio,torch,torchaudio,yaml,tempfile,pathlib,typing,io,logging,argparse,json,datetime,time,os,sys,subprocess,shutil \
-            --strip stt.py \
-            --distpath dist/${{ matrix.platform }}
+          pyinstaller --onefile --hidden-import=faster_whisper,soundfile,numpy,ctranslate2,pyannote.audio,torch,torchaudio,yaml,tempfile,pathlib,typing,io,logging,argparse,json,datetime,time,os,sys,subprocess,shutil --strip stt.py --distpath dist/${{ matrix.platform }}
 
       - name: Upload STT
         uses: actions/upload-artifact@v4
