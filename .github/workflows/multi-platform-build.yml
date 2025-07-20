@@ -9,31 +9,20 @@ on:
   workflow_dispatch:
 
 jobs:
-  # 轻量级工具构建 (Gemini-STT和工具脚本)
-  build-light-tools:
+  # Gemini-STT 构建 (轻量级云端转录工具)
+  build-gemini-stt:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x64 build
           - os: ubuntu-22.04
-            arch: x64
             platform: linux-x64
             setup_python_arch: x64
-          # Linux ARM64 build (官方支持，2025年1月公共仓库免费)
-          - os: ubuntu-22.04-arm
-            arch: arm64
-            platform: linux-arm64
-            setup_python_arch: arm64
-          # Windows builds
           - os: windows-2022
-            arch: x64
             platform: windows-x64
             setup_python_arch: x64
-          # macOS builds
           - os: macos-15
-            arch: arm64
             platform: macos-arm64
             setup_python_arch: arm64
 
@@ -58,27 +47,68 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller requests urllib3 tqdm huggingface_hub pyyaml
+          python -m pip install pyinstaller requests urllib3
 
       - name: Build gemini-stt
         run: |
-          pyinstaller --onefile --hidden-import=requests,urllib3,json,argparse,mimetypes,datetime,sys,os,time,re --strip gemini-stt.py --distpath dist/${{ matrix.platform }}
+          pyinstaller --onefile \
+            --hidden-import=requests,urllib3,json,argparse,mimetypes,datetime,sys,os,time,re \
+            --strip gemini-stt.py \
+            --distpath dist/${{ matrix.platform }}
 
-      - name: Build convert_whisper
-        run: |
-          pyinstaller --onefile --hidden-import=huggingface_hub,tqdm,shutil,pathlib,argparse,os --strip tools/convert_whisper.py --distpath dist/${{ matrix.platform }}
-
-      - name: Build get_Pyannote_model
-        run: |
-          pyinstaller --onefile --hidden-import=huggingface_hub,yaml,shutil,subprocess,pathlib,argparse,os,sys --strip tools/get_Pyannote_model.py --distpath dist/${{ matrix.platform }}
-
-      # 单独上传每个轻量级工具 (文件名_py-架构-版本号)
       - name: Upload gemini-stt
         uses: actions/upload-artifact@v4
         with:
           name: gemini-stt_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
           path: dist/${{ matrix.platform }}/gemini-stt*
           compression-level: 0
+
+  # Convert Whisper 模型转换工具构建
+  build-convert-whisper:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64
+            setup_python_arch: x64
+          - os: windows-2022
+            platform: windows-x64
+            setup_python_arch: x64
+          - os: macos-15
+            platform: macos-arm64
+            setup_python_arch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.setup_python_arch }}
+
+      - name: Set commit version
+        id: version
+        run: |
+          VERSION=$(git log --format=%B -1 | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller huggingface_hub tqdm
+
+      - name: Build convert_whisper
+        run: |
+          pyinstaller --onefile \
+            --hidden-import=huggingface_hub,tqdm,shutil,pathlib,argparse,os \
+            --strip tools/convert_whisper.py \
+            --distpath dist/${{ matrix.platform }}
 
       - name: Upload convert_whisper
         uses: actions/upload-artifact@v4
@@ -87,6 +117,53 @@ jobs:
           path: dist/${{ matrix.platform }}/convert_whisper*
           compression-level: 0
 
+  # Pyannote 模型管理工具构建
+  build-get-pyannote-model:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64
+            setup_python_arch: x64
+          - os: windows-2022
+            platform: windows-x64
+            setup_python_arch: x64
+          - os: macos-15
+            platform: macos-arm64
+            setup_python_arch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.setup_python_arch }}
+
+      - name: Set commit version
+        id: version
+        run: |
+          VERSION=$(git log --format=%B -1 | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller huggingface_hub pyyaml
+
+      - name: Build get_Pyannote_model
+        run: |
+          pyinstaller --onefile \
+            --hidden-import=huggingface_hub,yaml,shutil,subprocess,pathlib,argparse,os,sys \
+            --strip tools/get_Pyannote_model.py \
+            --distpath dist/${{ matrix.platform }}
+
       - name: Upload get_Pyannote_model
         uses: actions/upload-artifact@v4
         with:
@@ -94,32 +171,52 @@ jobs:
           path: dist/${{ matrix.platform }}/get_Pyannote_model*
           compression-level: 0
 
-  # STT主程序构建 (重型依赖)
+  # STT主程序构建 (重型依赖) - 双版本策略
   build-stt:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x64 build
+          # Linux x64 - CPU版本
           - os: ubuntu-22.04
             arch: x64
-            platform: linux-x64
+            platform: linux-x64-cpu
+            torch_variant: cpu
+            torch_index: "https://download.pytorch.org/whl/cpu"
+            name_suffix: "CPU"
             setup_python_arch: x64
-          # Linux ARM64 build (官方支持，2025年1月公共仓库免费)
-          - os: ubuntu-22.04-arm
-            arch: arm64
-            platform: linux-arm64
-            setup_python_arch: arm64
-          # Windows builds
+          # Linux x64 - CUDA版本
+          - os: ubuntu-22.04
+            arch: x64
+            platform: linux-x64-cuda
+            torch_variant: cuda
+            torch_index: "https://download.pytorch.org/whl/cu121"
+            name_suffix: "CUDA"
+            setup_python_arch: x64
+          # Windows x64 - CPU版本
           - os: windows-2022
             arch: x64
-            platform: windows-x64
+            platform: windows-x64-cpu
+            torch_variant: cpu
+            torch_index: "https://download.pytorch.org/whl/cpu"
+            name_suffix: "CPU"
             setup_python_arch: x64
-          # macOS builds
+          # Windows x64 - CUDA版本
+          - os: windows-2022
+            arch: x64
+            platform: windows-x64-cuda
+            torch_variant: cuda
+            torch_index: "https://download.pytorch.org/whl/cu121"
+            name_suffix: "CUDA"
+            setup_python_arch: x64
+          # macOS ARM64 - MPS版本 (Apple Silicon GPU加速)
           - os: macos-15
             arch: arm64
-            platform: macos-arm64
+            platform: macos-arm64-mps
+            torch_variant: mps
+            torch_index: "default"
+            name_suffix: "MPS"
             setup_python_arch: arm64
 
     steps:
@@ -155,43 +252,66 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller numpy soundfile faster-whisper pyyaml
-          # 对于非ARM Linux，安装torch和相关依赖
-          if [[ "${{ matrix.platform }}" != "linux-arm64" ]]; then
-            # 使用CPU版本的torch以确保兼容性和减小包大小
-            python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-            python -m pip install ctranslate2
-            # 尝试安装pyannote.audio，失败时继续
-            python -m pip install pyannote.audio==3.1.1 || echo "Warning: pyannote.audio installation failed, continuing..."
+          
+          # 根据torch变体安装对应版本
+          if [[ "${{ matrix.torch_index }}" == "default" ]]; then
+            echo "Installing PyTorch with MPS support for macOS Apple Silicon"
+            python -m pip install torch torchaudio
           else
-            echo "Skipping torch/pyannote for ARM64 Linux due to compatibility issues"
-            echo "ARM64 Linux build will have limited functionality (no speaker diarization)"
+            echo "Installing PyTorch ${{ matrix.torch_variant }} variant from ${{ matrix.torch_index }}"
+            python -m pip install torch torchaudio --index-url ${{ matrix.torch_index }}
           fi
+          
+          # 安装共同依赖
+          python -m pip install ctranslate2
+          # 尝试安装pyannote.audio，失败时继续
+          python -m pip install pyannote.audio==3.1.1 || echo "Warning: pyannote.audio installation failed, continuing..."
 
       - name: Build STT
         run: |
-          # 根据平台调整隐藏导入
-          if [[ "${{ matrix.platform }}" != "linux-arm64" ]]; then
-            # 完整版本（包含所有依赖）
-            pyinstaller --onefile --hidden-import=faster_whisper,soundfile,numpy,ctranslate2,pyannote.audio,torch,torchaudio,yaml,tempfile,pathlib,typing,io,logging,argparse,json,datetime,time,os,sys,subprocess,shutil --strip stt.py --distpath dist/${{ matrix.platform }}
-          else
-            # ARM64简化版本（无torch/pyannote支持）
-            pyinstaller --onefile --hidden-import=faster_whisper,soundfile,numpy,yaml,tempfile,pathlib,typing,io,logging,argparse,json,datetime,time,os,sys,subprocess,shutil --strip stt.py --distpath dist/${{ matrix.platform }}
-          fi
+          echo "Building STT for ${{ matrix.platform }} with ${{ matrix.torch_variant }} support"
+          pyinstaller --onefile \
+            --hidden-import=faster_whisper,soundfile,numpy,ctranslate2,pyannote.audio,torch,torchaudio,yaml,tempfile,pathlib,typing,io,logging,argparse,json,datetime,time,os,sys,subprocess,shutil \
+            --strip stt.py \
+            --distpath dist/${{ matrix.platform }}
 
       - name: Upload STT
         uses: actions/upload-artifact@v4
         with:
-          name: stt_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          name: stt_py-${{ matrix.platform }}-${{ matrix.name_suffix }}-${{ steps.version.outputs.version }}
           path: dist/${{ matrix.platform }}/*
           compression-level: 0
 
-  # 同平台全套工具打包 (SKY-STT-all)
+  # 分版本平台工具打包 (SKY-STT-all)
   create-platform-bundles:
-    needs: [build-light-tools, build-stt]
+    needs: [build-gemini-stt, build-convert-whisper, build-get-pyannote-model, build-stt]
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        platform: [linux-x64, linux-arm64, windows-x64, macos-arm64]
+        include:
+          # Linux版本
+          - base_platform: linux-x64
+            full_platform: linux-x64-cpu
+            suffix: CPU
+            light_pattern: "*_py-linux-x64-*"
+          - base_platform: linux-x64
+            full_platform: linux-x64-cuda
+            suffix: CUDA
+            light_pattern: "*_py-linux-x64-*"
+          # Windows版本
+          - base_platform: windows-x64
+            full_platform: windows-x64-cpu
+            suffix: CPU
+            light_pattern: "*_py-windows-x64-*"
+          - base_platform: windows-x64
+            full_platform: windows-x64-cuda
+            suffix: CUDA
+            light_pattern: "*_py-windows-x64-*"
+          # macOS版本
+          - base_platform: macos-arm64
+            full_platform: macos-arm64-mps
+            suffix: MPS
+            light_pattern: "*_py-macos-arm64-*"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -204,25 +324,26 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
         shell: bash
 
-      # 下载该平台的所有工具
+      # 下载该平台的轻量级工具
       - name: Download light tools for platform
         uses: actions/download-artifact@v4
         with:
-          pattern: "*_py-${{ matrix.platform }}-*"
+          pattern: "${{ matrix.light_pattern }}"
           path: platform-bundle/
           merge-multiple: true
 
+      # 下载对应版本的STT
       - name: Download STT for platform
         uses: actions/download-artifact@v4
         with:
-          name: stt_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          name: stt_py-${{ matrix.full_platform }}-${{ matrix.suffix }}-${{ steps.version.outputs.version }}
           path: platform-bundle/
 
-      # 上传平台全套包 (ALL-仓库名字-架构-版本号)
+      # 上传平台全套包 (ALL-仓库名字-完整平台-版本号)
       - name: Upload SKY-STT Platform Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: ALL-SKY-STT-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          name: ALL-SKY-STT-${{ matrix.full_platform }}-${{ matrix.suffix }}-${{ steps.version.outputs.version }}
           path: platform-bundle/*
           compression-level: 0
 
@@ -254,13 +375,18 @@ jobs:
       - name: Create complete release bundle
         run: |
           mkdir -p complete-release
-          # 重新组织目录结构
-          for platform in linux-x64 linux-arm64 windows-x64 macos-arm64; do
-            mkdir -p "complete-release/$platform"
+          
+          # 重新组织目录结构 - 现在包含多个版本
+          for variant in "linux-x64-cpu-CPU" "linux-x64-cuda-CUDA" "windows-x64-cpu-CPU" "windows-x64-cuda-CUDA" "macos-arm64-mps-MPS"; do
+            IFS='-' read -r platform arch variant_type suffix <<< "$variant"
+            full_platform="${platform}-${arch}-${variant_type}"
+            
+            mkdir -p "complete-release/$full_platform"
             
             # 复制ALL-SKY-STT平台包 (包含所有4个工具)
-            if [ -d "release-bundle/ALL-SKY-STT-$platform-${{ steps.version.outputs.version }}" ]; then
-              cp -r "release-bundle/ALL-SKY-STT-$platform-${{ steps.version.outputs.version }}/"* "complete-release/$platform/"
+            bundle_name="ALL-SKY-STT-$full_platform-$suffix-${{ steps.version.outputs.version }}"
+            if [ -d "release-bundle/$bundle_name" ]; then
+              cp -r "release-bundle/$bundle_name/"* "complete-release/$full_platform/"
             fi
           done
 
@@ -309,9 +435,18 @@ jobs:
       - name: Create platform-specific archives
         run: |
           cd release-assets/complete
-          for platform in linux-x64 linux-arm64 windows-x64 macos-arm64; do
-            if [ -d "$platform" ]; then
-              zip -r "../sky-stt-$platform-${{ steps.version.outputs.version }}.zip" "$platform"/*
+          
+          # 为每个平台和版本创建ZIP包
+          for variant in linux-x64-cpu linux-x64-cuda windows-x64-cpu windows-x64-cuda macos-arm64-mps; do
+            if [ -d "$variant" ]; then
+              # 提取版本信息用于命名
+              case "$variant" in
+                *-cpu)    suffix="CPU" ;;
+                *-cuda)   suffix="CUDA" ;;
+                *-mps)    suffix="MPS" ;;
+              esac
+              
+              zip -r "../sky-stt-$variant-$suffix-${{ steps.version.outputs.version }}.zip" "$variant"/*
             fi
           done
 
@@ -324,11 +459,23 @@ jobs:
           body: |
             ## SKY-STT Multi-Platform Release ${{ steps.version.outputs.version }}
             
-            ### 📦 支持的平台
-            - **Linux x64**: `sky-stt-linux-x64-${{ steps.version.outputs.version }}.zip`
-            - **Linux ARM64**: `sky-stt-linux-arm64-${{ steps.version.outputs.version }}.zip`
-            - **Windows x64**: `sky-stt-windows-x64-${{ steps.version.outputs.version }}.zip`
-            - **macOS ARM64**: `sky-stt-macos-arm64-${{ steps.version.outputs.version }}.zip`
+            ### 🎯 版本选择指南
+            - **需要兼容性**：选择 CPU 版本 (~200MB)
+            - **有NVIDIA显卡**：选择 CUDA 版本 (~2.5GB，8倍性能提升)
+            - **macOS用户**：选择 MPS 版本 (~300MB，Apple Silicon GPU加速)
+            
+            ### 📦 支持的平台和版本
+            
+            #### Linux x64
+            - **CPU版本**: `sky-stt-linux-x64-cpu-CPU-${{ steps.version.outputs.version }}.zip` (兼容所有设备)
+            - **CUDA版本**: `sky-stt-linux-x64-cuda-CUDA-${{ steps.version.outputs.version }}.zip` (需要NVIDIA GPU + CUDA 12.1+)
+            
+            #### Windows x64  
+            - **CPU版本**: `sky-stt-windows-x64-cpu-CPU-${{ steps.version.outputs.version }}.zip` (兼容所有设备)
+            - **CUDA版本**: `sky-stt-windows-x64-cuda-CUDA-${{ steps.version.outputs.version }}.zip` (需要NVIDIA GPU + CUDA 12.1+)
+            
+            #### macOS ARM64 (Apple Silicon)
+            - **MPS版本**: `sky-stt-macos-arm64-mps-MPS-${{ steps.version.outputs.version }}.zip` (M1/M2/M3芯片GPU加速)
             
             ### 🛠️ 包含工具
             - **stt**: 主STT引擎，基于FasterWhisper + Pyannote，支持本地语音识别和说话人分割
@@ -336,5 +483,10 @@ jobs:
             - **convert_whisper**: Whisper模型转换工具，自动下载并转换为faster-whisper格式
             - **get_Pyannote_model**: Pyannote模型管理工具，一键下载和配置说话人分割模型
             
-            每个压缩包包含对应平台的所有4个工具的可执行文件。
+            ### ⚡ 性能对比
+            | 版本 | 处理速度 | 包大小 | 硬件要求 |
+            |------|----------|--------|----------|
+            | CPU | 基准速度 | ~200MB | 无特殊要求 |
+            | CUDA | 8倍速度 | ~2.5GB | NVIDIA GPU |
+            | MPS | 3倍速度 | ~300MB | Apple Silicon |
           tag_name: ${{ github.ref }}
