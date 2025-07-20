@@ -1,0 +1,302 @@
+name: SKY-STT Multi-Platform Build
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  # STT工具构建 (AI语音转文字工具)
+  build-stt-tools:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64 build
+          - os: ubuntu-22.04
+            arch: x64
+            platform: linux-x64
+            setup_python_arch: x64
+          # Linux ARM64 build (官方支持，2025年1月公共仓库免费)
+          - os: ubuntu-22.04-arm
+            arch: arm64
+            platform: linux-arm64
+            setup_python_arch: arm64
+          # Windows builds
+          - os: windows-2022
+            arch: x64
+            platform: windows-x64
+            setup_python_arch: x64
+          # macOS builds
+          - os: macos-15
+            arch: arm64
+            platform: macos-arm64
+            setup_python_arch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.setup_python_arch }}
+
+      - name: Set commit version
+        id: version
+        run: |
+          VERSION=$(git log --format=%B -1 | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller faster-whisper pyannote.audio torch numpy soundfile requests urllib3 tqdm pathlib
+
+      - name: Build STT (FasterWhisper版本)
+        run: |
+          pyinstaller --onefile --hidden-import=faster_whisper,pyannote.audio,torch,numpy,soundfile,tempfile,logging,argparse,json,pathlib,tqdm --strip stt.py --distpath dist/${{ matrix.platform }}
+
+      - name: Build Gemini-STT
+        run: |
+          pyinstaller --onefile --hidden-import=requests,urllib3,json,argparse,mimetypes,datetime,sys,os,time,re --strip gemini-stt.py --distpath dist/${{ matrix.platform }}
+
+      - name: Build Convert-Whisper工具
+        run: |
+          pyinstaller --onefile --hidden-import=torch,ctranslate2,huggingface_hub,tqdm,pathlib,shutil,argparse --strip tools/convert_whisper.py --distpath dist/${{ matrix.platform }}
+
+      - name: Build Pyannote模型下载工具
+        run: |
+          pyinstaller --onefile --hidden-import=huggingface_hub,yaml,pathlib,shutil,subprocess,argparse --strip tools/get_Pyannote_model.py --distpath dist/${{ matrix.platform }}
+
+      # 单独上传每个STT工具 (文件名_py-架构-版本号)
+      - name: Upload STT
+        uses: actions/upload-artifact@v4
+        with:
+          name: STT_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          path: dist/${{ matrix.platform }}/stt*
+          compression-level: 0
+
+      - name: Upload Gemini-STT
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gemini-STT_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          path: dist/${{ matrix.platform }}/gemini-stt*
+          compression-level: 0
+
+      - name: Upload Convert-Whisper
+        uses: actions/upload-artifact@v4
+        with:
+          name: Convert-Whisper_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          path: dist/${{ matrix.platform }}/convert_whisper*
+          compression-level: 0
+
+      - name: Upload Get-Pyannote-Model
+        uses: actions/upload-artifact@v4
+        with:
+          name: Get-Pyannote-Model_py-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          path: dist/${{ matrix.platform }}/get_Pyannote_model*
+          compression-level: 0
+
+  # 同平台全套工具打包 (SKY-STT-all)
+  create-platform-bundles:
+    needs: [build-stt-tools]
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        platform: [linux-x64, linux-arm64, windows-x64, macos-arm64]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set commit version
+        id: version
+        run: |
+          VERSION=$(git log --format=%B -1 | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # 下载该平台的所有STT工具
+      - name: Download STT tools for platform
+        uses: actions/download-artifact@v4
+        with:
+          pattern: STT_py-${{ matrix.platform }}-*
+          path: platform-bundle/
+          merge-multiple: true
+
+      - name: Download Gemini-STT for platform
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Gemini-STT_py-${{ matrix.platform }}-*
+          path: platform-bundle/
+          merge-multiple: true
+
+      - name: Download Convert-Whisper for platform
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Convert-Whisper_py-${{ matrix.platform }}-*
+          path: platform-bundle/
+          merge-multiple: true
+
+      - name: Download Get-Pyannote-Model for platform
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Get-Pyannote-Model_py-${{ matrix.platform }}-*
+          path: platform-bundle/
+          merge-multiple: true
+
+      # 上传平台全套包 (ALL-仓库名字-架构-版本号)
+      - name: Upload SKY-STT Platform Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ALL-SKY-STT-${{ matrix.platform }}-${{ steps.version.outputs.version }}
+          path: platform-bundle/*
+          compression-level: 0
+
+  # 全平台合集打包
+  create-release-bundle:
+    needs: [create-platform-bundles]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set commit version
+        id: version
+        run: |
+          VERSION=$(git log --format=%B -1 | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # 下载所有ALL-SKY-STT平台包
+      - name: Download all ALL-SKY-STT platform bundles
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ALL-SKY-STT-*
+          path: release-bundle/
+          merge-multiple: false
+
+      # 创建完整发布包
+      - name: Create complete release bundle
+        run: |
+          mkdir -p complete-release
+          # 重新组织目录结构
+          for platform in linux-x64 linux-arm64 windows-x64 macos-arm64; do
+            mkdir -p "complete-release/$platform"
+            
+            # 复制ALL-SKY-STT平台包 (包含所有4个工具)
+            if [ -d "release-bundle/ALL-SKY-STT-$platform-${{ steps.version.outputs.version }}" ]; then
+              cp -r "release-bundle/ALL-SKY-STT-$platform-${{ steps.version.outputs.version }}/"* "complete-release/$platform/"
+            fi
+          done
+
+      - name: Upload Complete Release Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: FULL-SKY-STT-${{ steps.version.outputs.version }}
+          path: complete-release/*
+          compression-level: 0
+
+  # Release发布 (仅在release触发时执行)
+  publish-release:
+    if: github.event_name == 'release'
+    needs: [create-release-bundle]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set commit version
+        id: version
+        run: |
+          VERSION=$(git log --format=%B -1 | head -1)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      # 下载所有单独程序artifacts
+      - name: Download all single program artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: STT_py-*
+          path: release-assets/single/
+          merge-multiple: false
+
+      - name: Download Gemini-STT single program artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Gemini-STT_py-*
+          path: release-assets/single/
+          merge-multiple: false
+
+      - name: Download Convert-Whisper single program artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Convert-Whisper_py-*
+          path: release-assets/single/
+          merge-multiple: false
+
+      - name: Download Get-Pyannote-Model single program artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Get-Pyannote-Model_py-*
+          path: release-assets/single/
+          merge-multiple: false
+
+      # 下载完整发布包
+      - name: Download complete release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: FULL-SKY-STT-${{ steps.version.outputs.version }}
+          path: release-assets/complete/
+
+      # 创建平台ZIP包 (统一ZIP格式，避免双重压缩)
+      - name: Create platform-specific archives
+        run: |
+          cd release-assets/complete
+          for platform in linux-x64 linux-arm64 windows-x64 macos-arm64; do
+            if [ -d "$platform" ]; then
+              zip -r "../sky-stt-$platform-${{ steps.version.outputs.version }}.zip" "$platform"/*
+            fi
+          done
+
+      # 上传到Release (统一ZIP格式)
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/*.zip
+          name: "SKY-STT Release ${{ steps.version.outputs.version }}"
+          body: |
+            ## SKY-STT Multi-Platform Release ${{ steps.version.outputs.version }}
+            
+            ### 📦 支持的平台
+            - **Linux x64**: `sky-stt-linux-x64-${{ steps.version.outputs.version }}.zip`
+            - **Linux ARM64**: `sky-stt-linux-arm64-${{ steps.version.outputs.version }}.zip`
+            - **Windows x64**: `sky-stt-windows-x64-${{ steps.version.outputs.version }}.zip`
+            - **macOS ARM64**: `sky-stt-macos-arm64-${{ steps.version.outputs.version }}.zip`
+            
+            ### 🛠️ 包含工具
+            - **STT**: FasterWhisper与Pyannote集成的语音转文字工具
+            - **Gemini-STT**: 使用Gemini API的语音转文字工具
+            - **Convert-Whisper**: Whisper模型转换工具
+            - **Get-Pyannote-Model**: Pyannote模型下载工具
+            
+            每个压缩包包含对应平台的所有4个工具的可执行文件。
+            
+            ### 📖 使用说明
+            1. **STT工具**: 支持本地语音转文字，支持说话人分割
+            2. **Gemini-STT工具**: 使用Google Gemini API进行语音转文字
+            3. **Convert-Whisper工具**: 将Whisper模型转换为faster-whisper格式
+            4. **Get-Pyannote-Model工具**: 下载Pyannote说话人分割模型
+          tag_name: ${{ github.ref }}
