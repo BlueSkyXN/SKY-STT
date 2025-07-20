@@ -1,4 +1,4 @@
-name: SKY-STT Multi-Platform Build
+name: Multi-Platform Build
 
 on:
   push:
@@ -58,7 +58,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller faster-whisper pyannote.audio torch numpy soundfile requests urllib3 tqdm pathlib
+          python -m pip install pyinstaller faster-whisper pyannote.audio torch numpy soundfile requests urllib3 tqdm
 
       - name: Build STT (FasterWhisper版本)
         run: |
