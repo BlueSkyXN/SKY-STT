@@ -1,0 +1,49 @@
+# SKY-STT - 语音转文字工具依赖文件
+# Speech-to-Text Tool Requirements
+
+# ========== 核心依赖 (Core Dependencies) ==========
+# Whisper模型推理引擎
+faster-whisper>=0.10.0
+
+# 音频处理
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# ========== 说话人分割 (Speaker Diarization) ==========
+# 说话人分割功能 (可选，但推荐)
+pyannote.audio==3.1.1
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# 配置文件支持
+PyYAML>=6.0
+
+# ========== Gemini API支持 (Gemini API Support) ==========
+# HTTP请求
+requests>=2.31.0
+urllib3>=2.0.0
+
+# ========== 模型转换工具 (Model Conversion Tools) ==========
+# Hugging Face模型下载和转换
+huggingface-hub>=0.19.0
+ctranslate2>=3.20.0
+tqdm>=4.66.0
+
+# ========== 可选依赖 (Optional Dependencies) ==========
+# 用于更好的日志输出
+colorlog>=6.7.0
+
+# ========== 注意事项 (Notes) ==========
+# 1. FFmpeg需要单独安装（音频格式转换）:
+#    - Ubuntu/Debian: sudo apt install ffmpeg
+#    - macOS: brew install ffmpeg
+#    - Windows: 下载并添加到PATH
+#
+# 2. CUDA支持（GPU加速，可选）:
+#    - CUDA 11.8: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
+#    - CUDA 12.1: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# 3. Hugging Face Token（说话人分割必需）:
+#    - 注册账号: https://huggingface.co
+#    - 申请访问: https://huggingface.co/pyannote/speaker-diarization-3.1
+#    - 设置环境变量: export HF_TOKEN=your_token_here
